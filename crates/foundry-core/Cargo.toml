@@ -1,0 +1,16 @@
+[package]
+name = "foundry-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+
+# Crypto for webhook verification
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
