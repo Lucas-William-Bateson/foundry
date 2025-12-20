@@ -1,1 +1,13 @@
 target
+
+# Secrets - NEVER commit these
+secrets.env
+.env
+*.pem
+*.key
+
+# Logs
+*.log
+
+# macOS
+.DS_Store

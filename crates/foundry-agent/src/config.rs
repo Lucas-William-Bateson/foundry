@@ -11,6 +11,8 @@ pub struct Config {
     pub github_app_id: Option<String>,
     pub github_installation_id: Option<String>,
     pub github_private_key: Option<String>,
+    pub self_repo: Option<String>,
+    pub self_deploy_script: Option<String>,
 }
 
 impl Config {
@@ -44,6 +46,8 @@ impl Config {
             github_app_id: std::env::var("GITHUB_APP_ID").ok(),
             github_installation_id: std::env::var("GITHUB_INSTALLATION_ID").ok(),
             github_private_key,
+            self_repo: std::env::var("FOUNDRY_SELF_REPO").ok(),
+            self_deploy_script: std::env::var("FOUNDRY_SELF_DEPLOY_SCRIPT").ok(),
         })
     }
 

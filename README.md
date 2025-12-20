@@ -12,54 +12,93 @@ GitHub (webhook) → foundryd (server) → PostgreSQL (job queue) → foundry-ag
 - **foundry-agent**: Polls for jobs and executes them in Docker containers
 - **foundry-core**: Shared types and utilities
 
-## Quick Start
+## Quick Start (Docker)
+
+### 1. Create secrets.env
+
+```bash
+cp config/foundry.env.example secrets.env
+vim secrets.env  # Add your values
+```
+
+### 2. Start services
+
+```bash
+docker compose up -d
+```
+
+### 3. Set up GitHub webhook
+
+1. Go to your GitHub org settings → Webhooks
+2. Add webhook:
+   - **Payload URL**: `https://your-domain/webhook/github`
+   - **Content type**: `application/json`
+   - **Secret**: Same as `GITHUB_WEBHOOK_SECRET` in secrets.env
+   - **Events**: Just the `push` event
+
+## Self-Deployment
+
+Foundry can deploy itself! When you push to the Foundry repo, it will:
+
+1. Detect the push is to its own repo
+2. Run the deploy script instead of a Docker container
+3. Pull, rebuild, and restart all services
+
+To enable, set in docker-compose.yml:
+
+```
+FOUNDRY_SELF_REPO=your-org/foundry
+```
+
+## Deploying Apps with foundry.toml
+
+Add a `foundry.toml` to your repo to configure builds and deployments:
+
+```toml
+[build]
+dockerfile = "Dockerfile"    # Build from Dockerfile
+# image = "node:20-alpine"   # Or use pre-built image
+command = "npm test"         # CI command (when no [deploy] section)
+
+[deploy]
+name = "my-app"              # Container/project name (triggers deploy mode)
+domain = "myapp.l3s.me"      # Your app's domain
+port = 3000                  # Port to expose
+# compose_file = "docker-compose.yml"  # For complex deployments
+
+[env]
+NODE_ENV = "production"
+```
+
+**Modes:**
+
+- No `[deploy]` section: Runs `build.command` in a container, then exits (CI mode)
+- `[deploy]` with `name`: Builds image, runs persistent container with `--restart unless-stopped`
+- `[deploy]` with `compose_file`: Runs `docker compose up -d --build`
+
+## Development (without Docker)
 
 ### 1. Start PostgreSQL
 
 ```bash
-docker compose -f docker/compose.yml up -d
+docker compose up -d postgres
 ```
 
 ### 2. Initialize the database
 
 ```bash
-psql -h localhost -U postgres -d foundry -f migrations/001_init.sql
+psql -h localhost -U foundry -d foundry -f migrations/001_init.sql
 ```
 
-### 3. Configure environment
+### 3. Run locally
 
 ```bash
 # Server
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/foundry
-export GITHUB_WEBHOOK_SECRET=your-secret-here
+cargo run -p foundryd
 
-# Agent
-export FOUNDRY_SERVER_URL=http://localhost:8080
-export FOUNDRY_AGENT_ID=mac-mini-agent
-export FOUNDRY_DEFAULT_COMMAND="echo 'Hello from Foundry!'"
+# Agent (another terminal)
+cargo run -p foundry-agent
 ```
-
-### 4. Build and run
-
-```bash
-# Build everything
-cargo build --release
-
-# Run the server (in one terminal)
-cargo run --release -p foundryd
-
-# Run the agent (in another terminal)
-cargo run --release -p foundry-agent
-```
-
-### 5. Set up GitHub webhook
-
-1. Go to your repo/org settings → Webhooks
-2. Add webhook:
-   - **Payload URL**: `https://your-server/webhook/github`
-   - **Content type**: `application/json`
-   - **Secret**: Same as `GITHUB_WEBHOOK_SECRET`
-   - **Events**: Just the `push` event
 
 ## Environment Variables
 

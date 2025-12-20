@@ -9,8 +9,8 @@ serde_json.workspace = true
 uuid.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
+toml = "0.8"
 
-# Crypto for webhook verification
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"

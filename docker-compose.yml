@@ -1,0 +1,58 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: foundry
+      POSTGRES_PASSWORD: foundry
+      POSTGRES_DB: foundry
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foundry"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  foundryd:
+    build: .
+    command: foundryd
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://foundry:foundry@postgres:5432/foundry
+      FOUNDRY_BIND_ADDR: 0.0.0.0:8080
+      FOUNDRY_ENABLE_TUNNEL: "true"
+      CF_TUNNEL_NAME: foundry
+      CF_TUNNEL_DOMAIN: foundry.l3s.me
+    env_file:
+      - secrets.env
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  agent:
+    build: .
+    command: foundry-agent
+    depends_on:
+      - foundryd
+    environment:
+      FOUNDRY_SERVER_URL: http://foundryd:8080
+      FOUNDRY_AGENT_ID: docker-agent
+      FOUNDRY_WORKSPACE_DIR: /workspace
+      FOUNDRY_SELF_REPO: foundry
+      FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
+    env_file:
+      - secrets.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_workspace:/workspace
+      - .:/app:ro
+    working_dir: /app
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  agent_workspace:

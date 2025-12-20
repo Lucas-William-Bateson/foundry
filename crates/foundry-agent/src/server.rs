@@ -8,6 +8,7 @@ use foundry_core::{
 
 use crate::config::Config;
 
+#[derive(Clone)]
 pub struct ServerClient {
     client: Client,
     server_url: String,
@@ -55,6 +56,32 @@ impl ServerClient {
         };
 
         debug!("[job {}] {}", job.id, line);
+
+        let resp: ApiResponse = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if !resp.ok {
+            anyhow::bail!("Server rejected log: {:?}", resp.error);
+        }
+
+        Ok(())
+    }
+
+    pub async fn log_raw(&self, job_id: i64, claim_token: &uuid::Uuid, line: &str) -> Result<()> {
+        let url = format!("{}/agent/log", self.server_url);
+        let req = LogRequest {
+            job_id,
+            claim_token: *claim_token,
+            line: line.to_string(),
+        };
+
+        debug!("[job {}] {}", job_id, line);
 
         let resp: ApiResponse = self
             .client

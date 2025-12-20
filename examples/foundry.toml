@@ -1,0 +1,29 @@
+# Example foundry.toml for a typical web app
+
+[build]
+# Use a Dockerfile to build (optional - can use pre-built image instead)
+dockerfile = "Dockerfile"
+context = "."
+
+# Or use a pre-built image:
+# image = "node:20-alpine"
+
+# Build/test command (runs in CI mode when no [deploy] section)
+command = "npm run build && npm test"
+
+[deploy]
+# App name (triggers deploy mode, used for container name)
+name = "my-app"
+
+# Domain for the app (informational - Cloudflare tunnel configured separately)
+domain = "myapp.l3s.me"
+
+# Port to expose
+port = 3000
+
+# Or use docker-compose for more complex deployments:
+# compose_file = "docker-compose.yml"
+
+[env]
+NODE_ENV = "production"
+# Secrets should NOT go here - use docker-compose with env_file instead
