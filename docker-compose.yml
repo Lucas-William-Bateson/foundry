@@ -23,14 +23,14 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgres://foundry:foundry@postgres:5432/foundry
-      FOUNDRY_BIND_ADDR: 0.0.0.0:8080
+      FOUNDRY_BIND_ADDR: 0.0.0.0:8081
       FOUNDRY_ENABLE_TUNNEL: "true"
-      CF_TUNNEL_NAME: foundry
+      CF_TUNNEL_NAME: mini_server
       CF_TUNNEL_DOMAIN: foundry.l3s.me
     env_file:
       - secrets.env
     ports:
-      - "8080:8080"
+      - "8081:8081"
     restart: unless-stopped
 
   agent:
@@ -39,10 +39,10 @@ services:
     depends_on:
       - foundryd
     environment:
-      FOUNDRY_SERVER_URL: http://foundryd:8080
+      FOUNDRY_SERVER_URL: http://foundryd:8081
       FOUNDRY_AGENT_ID: docker-agent
       FOUNDRY_WORKSPACE_DIR: /workspace
-      FOUNDRY_SELF_REPO: foundry
+      FOUNDRY_SELF_REPO: Lucas-William-Bateson/foundry
       FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
     env_file:
       - secrets.env

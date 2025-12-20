@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tracing::{debug, info};
 
 use foundry_core::{ClaimedJob, FoundryConfig};
+use foundry_core::cloudflare::CloudflareClient;
 
 use crate::config::Config;
 use crate::github_app::GitHubApp;
@@ -324,10 +325,46 @@ async fn run_deploy(
     }
 
     if let Some(domain) = &fc.deploy.domain {
-        client.log(job, &format!("App available at: https://{}", domain)).await?;
+        let port = fc.deploy.port.unwrap_or(8080);
+        client.log(job, &format!("🌐 Configuring domain route: {} -> port {}", domain, port)).await?;
+        match setup_domain_route(domain, port).await {
+            Ok(()) => {
+                client.log(job, &format!("✅ Domain configured: https://{}", domain)).await?;
+            }
+            Err(e) => {
+                client.log(job, &format!("⚠️ Failed to setup domain route: {}", e)).await?;
+                tracing::error!("Failed to setup domain route for {}: {}", domain, e);
+            }
+        }
     }
 
     client.log(job, &format!("✅ {} deployed successfully", app_name)).await?;
+    Ok(())
+}
+
+async fn setup_domain_route(domain: &str, port: u16) -> anyhow::Result<()> {
+    if let Some(cf_client) = CloudflareClient::from_env()? {
+        // Check if route already exists
+        if let Some(existing_service) = cf_client.get_route(domain).await? {
+            let new_service = format!("http://127.0.0.1:{}", port);
+            if existing_service != new_service {
+                tracing::info!(
+                    "Domain {} is currently routed to {}, updating to {}",
+                    domain, existing_service, new_service
+                );
+            }
+        }
+
+        // Use 127.0.0.1 to force IPv4 (localhost can resolve to ::1 on some systems)
+        let service = format!("http://127.0.0.1:{}", port);
+        cf_client.add_route(domain, &service).await?;
+        tracing::info!("Domain route configured: {} -> {}", domain, service);
+    } else {
+        tracing::warn!(
+            "Cloudflare credentials not configured, skipping domain setup for {}",
+            domain
+        );
+    }
     Ok(())
 }
 

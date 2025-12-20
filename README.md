@@ -62,7 +62,7 @@ command = "npm test"         # CI command (when no [deploy] section)
 
 [deploy]
 name = "my-app"              # Container/project name (triggers deploy mode)
-domain = "myapp.l3s.me"      # Your app's domain
+domain = "myapp.l3s.me"      # Your app's domain (auto-configured via Cloudflare)
 port = 3000                  # Port to expose
 # compose_file = "docker-compose.yml"  # For complex deployments
 
@@ -75,6 +75,14 @@ NODE_ENV = "production"
 - No `[deploy]` section: Runs `build.command` in a container, then exits (CI mode)
 - `[deploy]` with `name`: Builds image, runs persistent container with `--restart unless-stopped`
 - `[deploy]` with `compose_file`: Runs `docker compose up -d --build`
+
+**Automatic Domain Routing:**
+
+When you specify a `domain` in `foundry.toml`, Foundry will automatically:
+
+1. Add a route to your shared Cloudflare tunnel
+2. Create/update the DNS CNAME record
+3. Your app is instantly accessible at that domain!
 
 ## Development (without Docker)
 

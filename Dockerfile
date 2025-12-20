@@ -1,4 +1,4 @@
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.87-bookworm AS builder
 
 WORKDIR /build
 
@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y \
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+
+# Pin home crate to version compatible with Rust 1.87
+RUN cargo update home@0.5.12 --precise 0.5.9
 
 RUN cargo build --release
 
