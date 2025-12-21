@@ -1,0 +1,221 @@
+<div class="page-header">
+  <div>
+    <a href="/" class="back-link">← Back to Dashboard</a>
+    <h1 class="page-title">Build #{{JOB_ID}}</h1>
+  </div>
+  <div id="job-status"></div>
+</div>
+
+<div class="job-meta-grid" id="job-meta">
+  <div class="meta-item">
+    <div class="meta-label">Repository</div>
+    <div class="meta-value" id="meta-repo">-</div>
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Branch</div>
+    <div class="meta-value" id="meta-branch">-</div>
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Commit</div>
+    <div class="meta-value" id="meta-commit">-</div>
+  </div>
+  <div class="meta-item">
+    <div class="meta-label">Duration</div>
+    <div class="meta-value" id="meta-duration">-</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span>Commit</span>
+    <a href="#" id="commit-link" class="btn" target="_blank"
+      >View on GitHub →</a
+    >
+  </div>
+  <div class="commit-info" id="commit-info">
+    <div class="commit-msg" id="commit-message">-</div>
+    <div class="commit-meta" id="commit-author">-</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span>Build Logs</span>
+    <label class="auto-scroll-toggle">
+      <input type="checkbox" id="auto-scroll" checked /> Auto-scroll
+    </label>
+  </div>
+  <pre class="logs" id="logs">Loading...</pre>
+</div>
+
+<style>
+  .back-link {
+    color: var(--fg-muted);
+    text-decoration: none;
+    font-size: 14px;
+  }
+  .back-link:hover {
+    color: var(--fg);
+  }
+  .job-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .meta-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .meta-label {
+    color: var(--fg-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .meta-value {
+    font-size: 16px;
+    font-weight: 500;
+  }
+  .meta-value code {
+    font-size: 14px;
+  }
+  .commit-info {
+    padding: 20px;
+  }
+  .auto-scroll-toggle {
+    font-size: 13px;
+    color: var(--fg-muted);
+    cursor: pointer;
+    user-select: none;
+  }
+  .auto-scroll-toggle input {
+    margin-right: 6px;
+  }
+  .logs {
+    background: #0d1117;
+    color: #c9d1d9;
+    margin: 0;
+    padding: 20px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-x: auto;
+    max-height: 600px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    border-radius: 0 0 8px 8px;
+  }
+  .log-line {
+    display: block;
+  }
+  .log-time {
+    color: #6e7681;
+    margin-right: 12px;
+    user-select: none;
+  }
+  .log-error {
+    color: #f85149;
+  }
+  .log-success {
+    color: #3fb950;
+  }
+</style>
+
+<script>
+  const jobId = {{JOB_ID}};
+  let lastLogCount = 0;
+
+  async function loadJob() {
+      try {
+          const res = await fetch(`/api/job/${jobId}`);
+          const data = await res.json();
+
+          // Update status
+          document.getElementById('job-status').innerHTML = statusHtml(data.status);
+
+          // Update metadata
+          document.getElementById('meta-repo').innerHTML = `<a href="https://github.com/${data.repo_owner}/${data.repo_name}" target="_blank">${data.repo_owner}/${data.repo_name}</a>`;
+          document.getElementById('meta-branch').textContent = data.git_ref.replace('refs/heads/', '');
+          document.getElementById('meta-commit').innerHTML = `<code>${data.git_sha.substring(0, 7)}</code>`;
+          document.getElementById('meta-duration').textContent = formatDuration(data.duration_secs);
+
+          // Update commit info
+          if (data.commit_message) {
+              document.getElementById('commit-message').textContent = data.commit_message;
+          }
+          if (data.commit_author) {
+              document.getElementById('commit-author').textContent = `by ${data.commit_author}`;
+          }
+          if (data.commit_url) {
+              document.getElementById('commit-link').href = data.commit_url;
+              document.getElementById('commit-link').style.display = '';
+          } else {
+              document.getElementById('commit-link').style.display = 'none';
+          }
+
+          // Update logs
+          if (data.logs && data.logs.length > lastLogCount) {
+              const logsEl = document.getElementById('logs');
+              const autoScroll = document.getElementById('auto-scroll').checked;
+              const wasScrolledToBottom = logsEl.scrollHeight - logsEl.clientHeight <= logsEl.scrollTop + 10;
+
+              if (lastLogCount === 0) {
+                  logsEl.innerHTML = '';
+              }
+
+              for (let i = lastLogCount; i < data.logs.length; i++) {
+                  const log = data.logs[i];
+                  const line = document.createElement('span');
+                  line.className = 'log-line';
+
+                  const time = document.createElement('span');
+                  time.className = 'log-time';
+                  time.textContent = new Date(log.timestamp).toLocaleTimeString();
+
+                  const msg = document.createElement('span');
+                  msg.textContent = log.message;
+                  if (log.message.toLowerCase().includes('error') || log.level === 'error') {
+                      msg.className = 'log-error';
+                  } else if (log.message.toLowerCase().includes('success') || log.message.includes('✓')) {
+                      msg.className = 'log-success';
+                  }
+
+                  line.appendChild(time);
+                  line.appendChild(msg);
+                  line.appendChild(document.createTextNode('\n'));
+                  logsEl.appendChild(line);
+              }
+
+              lastLogCount = data.logs.length;
+
+              if (autoScroll && wasScrolledToBottom) {
+                  logsEl.scrollTop = logsEl.scrollHeight;
+              }
+          } else if (!data.logs || data.logs.length === 0) {
+              document.getElementById('logs').textContent = 'No logs yet...';
+          }
+
+          // Stop polling if job is complete
+          return data.status === 'queued' || data.status === 'running';
+      } catch (e) {
+          console.error('Failed to load job:', e);
+          return false;
+      }
+  }
+
+  // Initial load
+  loadJob().then(shouldContinue => {
+      if (shouldContinue) {
+          const interval = setInterval(async () => {
+              const shouldContinue = await loadJob();
+              if (!shouldContinue) {
+                  clearInterval(interval);
+              }
+          }, 2000);
+      }
+  });
+</script>

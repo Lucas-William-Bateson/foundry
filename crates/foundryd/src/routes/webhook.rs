@@ -73,6 +73,12 @@ async fn github_webhook(
         return (StatusCode::OK, Json(ApiResponse::ok()));
     }
 
+    let commit_info = push.head_commit.as_ref().map(|c| db::CommitInfo {
+        message: Some(c.message.lines().next().unwrap_or(&c.message).to_string()),
+        author: c.author.username.clone().or_else(|| Some(c.author.name.clone())),
+        url: Some(c.url.clone()),
+    });
+
     let repo = &push.repository;
     match db::upsert_repo(
         &state.db,
@@ -83,7 +89,7 @@ async fn github_webhook(
     .await
     {
         Ok(repo_id) => {
-            match db::enqueue_job(&state.db, repo_id, &push.after, &push.git_ref).await {
+            match db::enqueue_job(&state.db, repo_id, &push.after, &push.git_ref, commit_info).await {
                 Ok(job_id) => {
                     info!(
                         "Enqueued job {} for {}/{} @ {}",

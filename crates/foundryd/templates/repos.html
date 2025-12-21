@@ -1,0 +1,182 @@
+<div class="page-header">
+  <h1 class="page-title">Repositories</h1>
+</div>
+
+<div class="repos-grid" id="repos-grid">
+  <div style="text-align: center; padding: 40px; color: var(--fg-muted)">
+    Loading...
+  </div>
+</div>
+
+<style>
+  .repos-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+    gap: 20px;
+  }
+  .repo-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    transition: border-color 0.2s;
+  }
+  .repo-card:hover {
+    border-color: var(--accent);
+  }
+  .repo-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 16px;
+  }
+  .repo-name {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .repo-name a {
+    color: var(--fg);
+    text-decoration: none;
+  }
+  .repo-name a:hover {
+    color: var(--accent);
+  }
+  .repo-owner {
+    color: var(--fg-muted);
+    font-size: 13px;
+    margin-top: 2px;
+  }
+  .repo-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .repo-stat {
+    text-align: center;
+  }
+  .repo-stat-value {
+    font-size: 20px;
+    font-weight: 600;
+  }
+  .repo-stat-label {
+    font-size: 11px;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .repo-last-build {
+    color: var(--fg-muted);
+    font-size: 13px;
+    margin-top: 12px;
+  }
+  .mini-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+  }
+  .mini-status.success {
+    background: rgba(34, 197, 94, 0.15);
+    color: #22c55e;
+  }
+  .mini-status.failure {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+  }
+</style>
+
+<script>
+  async function loadRepos() {
+    try {
+      const res = await fetch("/api/repos");
+      const repos = await res.json();
+      const grid = document.getElementById("repos-grid");
+
+      if (repos.length === 0) {
+        grid.innerHTML =
+          '<div style="text-align:center;padding:40px;color:var(--fg-muted)">No repositories yet. Push to a configured repo to get started!</div>';
+        return;
+      }
+
+      grid.innerHTML = repos
+        .map((repo) => {
+          const successRate =
+            repo.build_count > 0
+              ? ((repo.success_count / repo.build_count) * 100).toFixed(0)
+              : "-";
+          const lastStatus = repo.last_status;
+          const statusClass =
+            lastStatus === "completed"
+              ? "success"
+              : lastStatus === "failed"
+              ? "failure"
+              : "";
+
+          return `
+                <div class="repo-card">
+                    <div class="repo-header">
+                        <div>
+                            <div class="repo-name">
+                                <a href="https://github.com/${repo.owner}/${
+            repo.name
+          }" target="_blank">${repo.name}</a>
+                            </div>
+                            <div class="repo-owner">${repo.owner}</div>
+                        </div>
+                        ${
+                          lastStatus
+                            ? `<span class="mini-status ${statusClass}">${
+                                lastStatus === "completed"
+                                  ? "✓"
+                                  : lastStatus === "failed"
+                                  ? "✗"
+                                  : ""
+                              } ${lastStatus}</span>`
+                            : ""
+                        }
+                    </div>
+                    <div class="repo-stats">
+                        <div class="repo-stat">
+                            <div class="repo-stat-value">${
+                              repo.build_count
+                            }</div>
+                            <div class="repo-stat-label">Builds</div>
+                        </div>
+                        <div class="repo-stat">
+                            <div class="repo-stat-value success">${
+                              repo.success_count
+                            }</div>
+                            <div class="repo-stat-label">Passed</div>
+                        </div>
+                        <div class="repo-stat">
+                            <div class="repo-stat-value" style="color: ${
+                              repo.failure_count > 0
+                                ? "var(--danger)"
+                                : "inherit"
+                            }">${repo.failure_count}</div>
+                            <div class="repo-stat-label">Failed</div>
+                        </div>
+                    </div>
+                    ${
+                      repo.last_build_at
+                        ? `<div class="repo-last-build">Last build: ${formatRelative(
+                            repo.last_build_at
+                          )}</div>`
+                        : ""
+                    }
+                </div>
+            `;
+        })
+        .join("");
+    } catch (e) {
+      console.error("Failed to load repos:", e);
+    }
+  }
+
+  loadRepos();
+</script>

@@ -25,6 +25,20 @@ pub struct PushEvent {
     pub after: String,
     pub repository: Repository,
     pub pusher: Pusher,
+    pub head_commit: Option<HeadCommit>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct HeadCommit {
+    pub message: String,
+    pub author: CommitAuthor,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct CommitAuthor {
+    pub name: String,
+    pub username: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
