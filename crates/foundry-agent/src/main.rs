@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::Config;
-use crate::github_app::GitHubApp;
+use crate::github_app::{CheckConclusion, GitHubApp};
 use crate::server::ServerClient;
 
 #[tokio::main]
@@ -52,18 +52,74 @@ async fn main() -> Result<()> {
                     &job.git_sha[..8.min(job.git_sha.len())]
                 );
 
-                let success =
+                let check_run_id = if let Some(ref app) = github_app {
+                    match app
+                        .create_check_run(
+                            &job.repo_owner,
+                            &job.repo_name,
+                            &job.git_sha,
+                            "Foundry CI",
+                        )
+                        .await
+                    {
+                        Ok(id) => Some(id),
+                        Err(e) => {
+                            warn!("Failed to create check run: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let (success, error_msg) =
                     match docker::run_job(&client, &job, &config, github_app.as_ref()).await {
                         Ok(()) => {
                             info!("Job {} completed successfully", job.id);
-                            true
+                            (true, None)
                         }
                         Err(e) => {
                             error!("Job {} failed: {}", job.id, e);
                             let _ = client.log(&job, &format!("ERROR: {}", e)).await;
-                            false
+                            (false, Some(e.to_string()))
                         }
                     };
+
+                if let Some(ref app) = github_app {
+                    if let Some(check_id) = check_run_id {
+                        let logs = match client.get_logs(&job).await {
+                            Ok(logs) => Some(logs),
+                            Err(e) => {
+                                warn!("Failed to fetch logs: {}", e);
+                                None
+                            }
+                        };
+
+                        let (conclusion, summary) = if success {
+                            (CheckConclusion::Success, "Build completed successfully! ✅".to_string())
+                        } else {
+                            let summary = format!(
+                                "Build failed ❌\n\n{}",
+                                error_msg.unwrap_or_default()
+                            );
+                            (CheckConclusion::Failure, summary)
+                        };
+
+                        if let Err(e) = app
+                            .complete_check_run(
+                                &job.repo_owner,
+                                &job.repo_name,
+                                check_id,
+                                conclusion,
+                                &summary,
+                                logs.as_deref(),
+                            )
+                            .await
+                        {
+                            warn!("Failed to complete check run: {}", e);
+                        }
+                    }
+                }
 
                 if let Err(e) = client.finish(&job, success).await {
                     error!("Failed to report job completion: {}", e);

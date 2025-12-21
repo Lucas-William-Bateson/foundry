@@ -324,16 +324,20 @@ async fn run_deploy(
         }
     }
 
-    if let Some(domain) = &fc.deploy.domain {
+    let domains = fc.deploy.all_domains();
+    if !domains.is_empty() {
         let port = fc.deploy.port.unwrap_or(8080);
-        client.log(job, &format!("🌐 Configuring domain route: {} -> port {}", domain, port)).await?;
-        match setup_domain_route(domain, port).await {
-            Ok(()) => {
-                client.log(job, &format!("✅ Domain configured: https://{}", domain)).await?;
-            }
-            Err(e) => {
-                client.log(job, &format!("⚠️ Failed to setup domain route: {}", e)).await?;
-                tracing::error!("Failed to setup domain route for {}: {}", domain, e);
+        client.log(job, &format!("🌐 Configuring {} domain route(s) -> port {}", domains.len(), port)).await?;
+        
+        for domain in domains {
+            match setup_domain_route(domain, port).await {
+                Ok(()) => {
+                    client.log(job, &format!("✅ Domain configured: https://{}", domain)).await?;
+                }
+                Err(e) => {
+                    client.log(job, &format!("⚠️ Failed to setup domain route for {}: {}", domain, e)).await?;
+                    tracing::error!("Failed to setup domain route for {}: {}", domain, e);
+                }
             }
         }
     }
@@ -344,7 +348,6 @@ async fn run_deploy(
 
 async fn setup_domain_route(domain: &str, port: u16) -> anyhow::Result<()> {
     if let Some(cf_client) = CloudflareClient::from_env()? {
-        // Check if route already exists
         if let Some(existing_service) = cf_client.get_route(domain).await? {
             let new_service = format!("http://127.0.0.1:{}", port);
             if existing_service != new_service {

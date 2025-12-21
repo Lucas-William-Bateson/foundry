@@ -21,10 +21,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     environment:
       DATABASE_URL: postgres://foundry:foundry@postgres:5432/foundry
       FOUNDRY_BIND_ADDR: 0.0.0.0:8081
-      FOUNDRY_ENABLE_TUNNEL: "true"
+      FOUNDRY_ENABLE_TUNNEL: "false"
       CF_TUNNEL_NAME: mini_server
       CF_TUNNEL_DOMAIN: foundry.l3s.me
     env_file:
@@ -33,23 +38,34 @@ services:
       - "8081:8081"
     restart: unless-stopped
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: ["tunnel", "--no-autoupdate", "run"]
+    network_mode: host
+    env_file:
+      - secrets.env
+    restart: unless-stopped
+
   agent:
     build: .
     command: foundry-agent
     depends_on:
-      - foundryd
+      foundryd:
+        condition: service_healthy
     environment:
       FOUNDRY_SERVER_URL: http://foundryd:8081
       FOUNDRY_AGENT_ID: docker-agent
       FOUNDRY_WORKSPACE_DIR: /workspace
       FOUNDRY_SELF_REPO: Lucas-William-Bateson/foundry
       FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
+      GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
     env_file:
       - secrets.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_workspace:/workspace
       - .:/app:ro
+      - ${GITHUB_APP_PRIVATE_KEY_FILE}:/secrets/github-app.pem:ro
     working_dir: /app
     restart: unless-stopped
 

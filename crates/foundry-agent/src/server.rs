@@ -122,4 +122,22 @@ impl ServerClient {
 
         Ok(())
     }
+
+    pub async fn get_logs(&self, job: &ClaimedJob) -> Result<String> {
+        let url = format!("{}/agent/logs/{}", self.server_url, job.id);
+
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("claim_token", job.claim_token.to_string())])
+            .send()
+            .await
+            .context("Failed to fetch logs")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Server returned error: {}", resp.status());
+        }
+
+        resp.text().await.context("Failed to read logs response")
+    }
 }

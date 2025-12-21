@@ -149,3 +149,44 @@ pub async fn finish_job(
 
     Ok(result.rows_affected() > 0)
 }
+
+pub async fn get_logs(
+    pool: &PgPool,
+    job_id: i64,
+    claim_token: Uuid,
+) -> Result<Option<String>> {
+    let job_exists: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM job WHERE id = $1 AND claim_token = $2
+        )
+        "#,
+    )
+    .bind(job_id)
+    .bind(claim_token)
+    .fetch_one(pool)
+    .await?;
+
+    if !job_exists {
+        return Ok(None);
+    }
+
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT line FROM job_log
+        WHERE job_id = $1
+        ORDER BY ts ASC
+        "#,
+    )
+    .bind(job_id)
+    .fetch_all(pool)
+    .await?;
+
+    let logs = rows
+        .into_iter()
+        .map(|(line,)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Ok(Some(logs))
+}

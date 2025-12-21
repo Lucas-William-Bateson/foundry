@@ -1,4 +1,11 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -11,6 +18,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/agent/claim", post(claim_job))
         .route("/agent/log", post(append_log))
         .route("/agent/finish", post(finish_job))
+        .route("/agent/logs/{job_id}", get(get_logs))
 }
 
 async fn claim_job(
@@ -71,6 +79,26 @@ async fn finish_job(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::error("Database error")),
             )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GetLogsQuery {
+    claim_token: uuid::Uuid,
+}
+
+async fn get_logs(
+    State(state): State<Arc<AppState>>,
+    Path(job_id): Path<i64>,
+    Query(query): Query<GetLogsQuery>,
+) -> impl IntoResponse {
+    match db::get_logs(&state.db, job_id, query.claim_token).await {
+        Ok(Some(logs)) => (StatusCode::OK, logs),
+        Ok(None) => (StatusCode::FORBIDDEN, "Invalid job or token".to_string()),
+        Err(e) => {
+            error!("Failed to get logs: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
         }
     }
 }
