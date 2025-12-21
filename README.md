@@ -1,6 +1,6 @@
 # Foundry CI/CD
 
-A minimal, self-hosted CI/CD system written in Rust. Replace GitHub Actions with something you control.
+A minimal, self-hosted CI/CD system written in Rust. Replace GitHub Actions with something you control. And don't pay for runners you self host!
 
 ## Architecture
 
