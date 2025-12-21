@@ -41,7 +41,7 @@ ALTER TABLE job ADD COLUMN IF NOT EXISTS sender_type TEXT;
 
 -- Head commit extended info
 ALTER TABLE job ADD COLUMN IF NOT EXISTS commit_author_email TEXT;
-ALTER TABLE job ADD COLUMN IF NOT EXISTS commit_timestamp TIMESTAMPTZ;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS commit_timestamp TEXT;
 ALTER TABLE job ADD COLUMN IF NOT EXISTS commit_tree_id TEXT;
 
 -- Committer info (can be different from author)
@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS job_commit (
     committer_name TEXT,
     committer_email TEXT,
     committer_username TEXT,
-    timestamp TIMESTAMPTZ,
+    timestamp TEXT,
     url TEXT,
     added TEXT[],
     modified TEXT[],
