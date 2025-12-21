@@ -41,6 +41,13 @@ async fn main() -> Result<()> {
 
     info!("Connected to database");
 
+    // Run migrations automatically
+    info!("Running database migrations...");
+    sqlx::migrate!("../../migrations")
+        .run(&db)
+        .await?;
+    info!("Migrations complete");
+
     let _tunnel = if let Some(tunnel_config) = &config.tunnel {
         info!("Starting Cloudflare tunnel...");
         let cf_config = CloudflareConfig {
