@@ -44,6 +44,8 @@ pub struct DeployConfig {
     #[serde(default)]
     pub domain: Option<String>,
     #[serde(default)]
+    pub domains: Option<Vec<String>>,
+    #[serde(default)]
     pub port: Option<u16>,
     #[serde(default)]
     pub compose_file: Option<String>,
@@ -54,6 +56,19 @@ pub struct DeployConfig {
 impl DeployConfig {
     pub fn is_enabled(&self) -> bool {
         self.name.is_some() || self.compose_file.is_some()
+    }
+
+    pub fn all_domains(&self) -> Vec<&str> {
+        let mut result = Vec::new();
+        if let Some(d) = &self.domain {
+            result.push(d.as_str());
+        }
+        if let Some(ds) = &self.domains {
+            for d in ds {
+                result.push(d.as_str());
+            }
+        }
+        result
     }
 }
 

@@ -28,7 +28,7 @@ pub async fn run_job(
     github_app: Option<&GitHubApp>,
 ) -> Result<()> {
     if is_self_deploy(job, config) {
-        return run_self_deploy(client, job, config).await;
+        return run_self_deploy(client, job, config, github_app).await;
     }
 
     let workspace = PathBuf::from(&config.workspace_dir).join(format!("job-{}", job.id));
@@ -105,6 +105,7 @@ async fn run_self_deploy(
     client: &ServerClient,
     job: &ClaimedJob,
     config: &Config,
+    github_app: Option<&GitHubApp>,
 ) -> Result<()> {
     info!("Self-deploy triggered for Foundry");
     client.log(job, "🔄 Self-deploy triggered").await?;
@@ -116,12 +117,28 @@ async fn run_self_deploy(
 
     client.log(job, &format!("Running deploy script: {}", script)).await?;
 
-    let mut child = Command::new("bash")
-        .arg(script)
+    let github_token = if let Some(app) = github_app {
+        match app.get_installation_token().await {
+            Ok(token) => Some(token),
+            Err(e) => {
+                client.log(job, &format!("⚠️ Failed to get GitHub token: {}", e)).await?;
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let mut cmd = Command::new("bash");
+    cmd.arg(script)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to start deploy script")?;
+        .stderr(Stdio::piped());
+
+    if let Some(token) = github_token {
+        cmd.env("GITHUB_TOKEN", token);
+    }
+
+    let mut child = cmd.spawn().context("Failed to start deploy script")?;
 
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
