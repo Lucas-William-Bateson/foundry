@@ -6,7 +6,11 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
+  const normalizedDateString = dateString.includes('Z') || dateString.includes('+') 
+    ? dateString 
+    : dateString.replace(' ', 'T') + 'Z';
+  
+  const date = new Date(normalizedDateString);
   const now = new Date();
   const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
 
