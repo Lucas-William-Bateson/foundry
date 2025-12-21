@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY migrations ./migrations
 
 # Limit parallelism to reduce memory usage during compilation
 ENV CARGO_BUILD_JOBS=2
