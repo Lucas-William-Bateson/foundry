@@ -95,9 +95,14 @@ pub struct Repository {
     pub language: Option<String>,
     pub topics: Option<Vec<String>>,
     pub visibility: Option<String>,
-    pub pushed_at: Option<i64>,
-    pub created_at: Option<i64>,
-    pub updated_at: Option<i64>,
+    // These can be either Unix timestamps (i64) or ISO strings depending on context
+    // Using Value to handle both cases
+    #[serde(default)]
+    pub pushed_at: Option<serde_json::Value>,
+    #[serde(default)]
+    pub created_at: Option<serde_json::Value>,
+    #[serde(default)]
+    pub updated_at: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
