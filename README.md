@@ -34,7 +34,7 @@ docker compose up -d
    - **Payload URL**: `https://your-domain/webhook/github`
    - **Content type**: `application/json`
    - **Secret**: Same as `GITHUB_WEBHOOK_SECRET` in secrets.env
-   - **Events**: Just the `push` event
+   - **Events**: Select `push` and `pull_request` events
 
 ## Self-Deployment
 
@@ -59,6 +59,12 @@ Add a `foundry.toml` to your repo to configure builds and deployments:
 dockerfile = "Dockerfile"    # Build from Dockerfile
 # image = "node:20-alpine"   # Or use pre-built image
 command = "npm test"         # CI command (when no [deploy] section)
+timeout = 1800               # Build timeout in seconds (default: 30 min)
+
+[triggers]
+branches = ["main", "master"]  # Branches to build on push
+pull_requests = true           # Build pull requests (default: true)
+# pr_target_branches = ["main"] # Only build PRs targeting these branches
 
 [deploy]
 name = "my-app"              # Container/project name (triggers deploy mode)
@@ -75,6 +81,16 @@ NODE_ENV = "production"
 - No `[deploy]` section: Runs `build.command` in a container, then exits (CI mode)
 - `[deploy]` with `name`: Builds image, runs persistent container with `--restart unless-stopped`
 - `[deploy]` with `compose_file`: Runs `docker compose up -d --build`
+
+**Triggers:**
+
+- **Push builds**: Triggered when pushing to branches listed in `triggers.branches`
+- **Pull request builds**: Triggered on PR open/sync if `triggers.pull_requests = true`
+- **Re-runs**: Any completed build can be re-run from the dashboard
+
+**Timeouts:**
+
+Builds automatically timeout after `build.timeout` seconds (default: 1800 = 30 minutes). Timed out builds are marked as failed.
 
 **Automatic Domain Routing:**
 

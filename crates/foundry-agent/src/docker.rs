@@ -33,7 +33,6 @@ pub async fn run_job(
 
     let workspace = PathBuf::from(&config.workspace_dir).join(format!("job-{}", job.id));
 
-    // Clean up any existing workspace from a previous failed job
     if workspace.exists() {
         debug!("Cleaning up existing workspace: {:?}", workspace);
         if let Err(e) = tokio::fs::remove_dir_all(&workspace).await {
@@ -96,7 +95,11 @@ pub async fn run_job(
         .await?;
 
     let env_vars = foundry_config.as_ref().map(|fc| &fc.env);
-    let success = run_container(client, job, &repo_dir, &image, &command, env_vars).await?;
+    let timeout_secs = foundry_config.as_ref().map(|fc| fc.build.timeout).unwrap_or(1800);
+    
+    client.log(job, &format!("Timeout: {} seconds", timeout_secs)).await?;
+    
+    let success = run_container(client, job, &repo_dir, &image, &command, env_vars, timeout_secs).await?;
 
     if let Err(e) = tokio::fs::remove_dir_all(&workspace).await {
         debug!("Failed to cleanup workspace: {}", e);
@@ -383,7 +386,6 @@ async fn setup_domain_route(domain: &str, port: u16) -> anyhow::Result<()> {
             }
         }
 
-        // Use 127.0.0.1 to force IPv4 (localhost can resolve to ::1 on some systems)
         let service = format!("http://127.0.0.1:{}", port);
         cf_client.add_route(domain, &service).await?;
         tracing::info!("Domain route configured: {} -> {}", domain, service);
@@ -403,6 +405,7 @@ async fn run_container(
     image: &str,
     command: &str,
     env_vars: Option<&std::collections::HashMap<String, String>>,
+    timeout_secs: u64,
 ) -> Result<bool> {
     let mut args = vec![
         "run".to_string(),
@@ -453,7 +456,39 @@ async fn run_container(
         lines
     });
 
-    let status = child.wait().await.context("Failed to wait for container")?;
+    let timeout_duration = std::time::Duration::from_secs(timeout_secs);
+    let wait_result = tokio::time::timeout(timeout_duration, child.wait()).await;
+
+    let status = match wait_result {
+        Ok(Ok(status)) => status,
+        Ok(Err(e)) => {
+            return Err(anyhow::anyhow!("Failed to wait for container: {}", e));
+        }
+        Err(_) => {
+            client.log(job, &format!("⏰ Build timed out after {} seconds", timeout_secs)).await?;
+            
+            if let Err(e) = child.kill().await {
+                tracing::warn!("Failed to kill timed out process: {}", e);
+            }
+            
+            let container_list = Command::new("docker")
+                .args(["ps", "-q", "--filter", &format!("label=foundry.job_id={}", job.id)])
+                .output()
+                .await;
+            
+            if let Ok(output) = container_list {
+                let container_ids = String::from_utf8_lossy(&output.stdout);
+                for container_id in container_ids.lines() {
+                    let _ = Command::new("docker")
+                        .args(["kill", container_id.trim()])
+                        .output()
+                        .await;
+                }
+            }
+            
+            return Err(anyhow::anyhow!("Build timed out after {} seconds", timeout_secs));
+        }
+    };
 
     if let Ok(stdout_lines) = stdout_handle.await {
         for line in stdout_lines {

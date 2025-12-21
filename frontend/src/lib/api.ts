@@ -80,3 +80,17 @@ export async function fetchRepos(): Promise<Repo[]> {
   if (!res.ok) throw new Error("Failed to fetch repos");
   return res.json();
 }
+
+export interface RerunResponse {
+  ok: boolean;
+  job_id?: number;
+  error?: string;
+}
+
+export async function rerunJob(id: number): Promise<RerunResponse> {
+  const res = await fetch(`${API_BASE}/job/${id}/rerun`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to rerun job");
+  return res.json();
+}

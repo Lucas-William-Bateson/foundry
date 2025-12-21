@@ -8,6 +8,8 @@ pub struct FoundryConfig {
     #[serde(default)]
     pub deploy: DeployConfig,
     #[serde(default)]
+    pub triggers: TriggersConfig,
+    #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 }
 
@@ -23,6 +25,12 @@ pub struct BuildConfig {
     pub command: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout: u64,
+}
+
+fn default_timeout() -> u64 {
+    1800
 }
 
 impl Default for BuildConfig {
@@ -33,6 +41,52 @@ impl Default for BuildConfig {
             context: None,
             command: None,
             args: Vec::new(),
+            timeout: default_timeout(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TriggersConfig {
+    #[serde(default = "default_branches")]
+    pub branches: Vec<String>,
+    #[serde(default = "default_true")]
+    pub pull_requests: bool,
+    #[serde(default)]
+    pub pr_target_branches: Option<Vec<String>>,
+}
+
+fn default_branches() -> Vec<String> {
+    vec!["main".to_string(), "master".to_string()]
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for TriggersConfig {
+    fn default() -> Self {
+        Self {
+            branches: default_branches(),
+            pull_requests: default_true(),
+            pr_target_branches: None,
+        }
+    }
+}
+
+impl TriggersConfig {
+    pub fn should_build_branch(&self, branch: &str) -> bool {
+        self.branches.iter().any(|b| b == branch)
+    }
+
+    pub fn should_build_pr(&self, target_branch: &str) -> bool {
+        if !self.pull_requests {
+            return false;
+        }
+        if let Some(ref targets) = self.pr_target_branches {
+            targets.iter().any(|b| b == target_branch)
+        } else {
+            true
         }
     }
 }

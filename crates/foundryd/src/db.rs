@@ -2,10 +2,10 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use foundry_core::{ClaimedJob, github::PushEvent};
+use foundry_core::{ClaimedJob, github::{PushEvent, PullRequestEvent, TriggerType}};
 
 /// Comprehensive push event data for storage
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PushEventData {
     // Basic info
     pub git_sha: String,
@@ -50,6 +50,9 @@ pub struct PushEventData {
     
     // Installation
     pub installation_id: Option<i64>,
+    
+    // Trigger type
+    pub trigger_type: TriggerType,
 }
 
 impl PushEventData {
@@ -92,6 +95,49 @@ impl PushEventData {
             sender_avatar_url: event.sender.as_ref().and_then(|s| s.avatar_url.clone()),
             sender_type: event.sender.as_ref().and_then(|s| s.sender_type.clone()),
             
+            installation_id: event.installation.as_ref().map(|i| i.id),
+            
+            trigger_type: TriggerType::Push,
+        }
+    }
+}
+
+/// Pull request event data for storage
+#[derive(Debug)]
+pub struct PullRequestEventData {
+    pub git_sha: String,
+    pub git_ref: String,
+    pub pr_number: i64,
+    pub pr_title: String,
+    pub pr_body: Option<String>,
+    pub pr_url: String,
+    pub pr_author: String,
+    pub pr_author_avatar: Option<String>,
+    pub base_ref: String,
+    pub base_sha: String,
+    pub sender_id: Option<i64>,
+    pub sender_login: Option<String>,
+    pub sender_avatar_url: Option<String>,
+    pub installation_id: Option<i64>,
+}
+
+impl PullRequestEventData {
+    pub fn from_pr_event(event: &PullRequestEvent) -> Self {
+        let pr = &event.pull_request;
+        Self {
+            git_sha: pr.head.sha.clone(),
+            git_ref: format!("refs/pull/{}/head", pr.number),
+            pr_number: pr.number,
+            pr_title: pr.title.clone(),
+            pr_body: pr.body.clone(),
+            pr_url: pr.html_url.clone(),
+            pr_author: pr.user.login.clone(),
+            pr_author_avatar: pr.user.avatar_url.clone(),
+            base_ref: pr.base.git_ref.clone(),
+            base_sha: pr.base.sha.clone(),
+            sender_id: event.sender.as_ref().map(|s| s.id),
+            sender_login: event.sender.as_ref().map(|s| s.login.clone()),
+            sender_avatar_url: event.sender.as_ref().and_then(|s| s.avatar_url.clone()),
             installation_id: event.installation.as_ref().map(|i| i.id),
         }
     }
@@ -137,10 +183,11 @@ pub async fn enqueue_job(
     repo_id: i64,
     data: &PushEventData,
 ) -> Result<i64> {
+    let trigger_type_str = data.trigger_type.to_string();
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO job (
-            repo_id, git_sha, git_ref, status,
+            repo_id, git_sha, git_ref, status, trigger_type,
             before_sha, compare_url, commits_count, distinct_commits_count,
             forced, deleted, created,
             commit_message, commit_author, commit_author_email, commit_url, commit_timestamp, commit_tree_id,
@@ -151,15 +198,15 @@ pub async fn enqueue_job(
             installation_id
         )
         VALUES (
-            $1, $2, $3, 'queued',
-            $4, $5, $6, $7,
-            $8, $9, $10,
-            $11, $12, $13, $14, $15, $16,
-            $17, $18, $19,
-            $20, $21, $22,
-            $23, $24,
-            $25, $26, $27, $28,
-            $29
+            $1, $2, $3, 'queued', $4::trigger_type,
+            $5, $6, $7, $8,
+            $9, $10, $11,
+            $12, $13, $14, $15, $16, $17,
+            $18, $19, $20,
+            $21, $22, $23,
+            $24, $25,
+            $26, $27, $28, $29,
+            $30
         )
         RETURNING id
         "#,
@@ -167,6 +214,7 @@ pub async fn enqueue_job(
     .bind(repo_id)
     .bind(&data.git_sha)
     .bind(&data.git_ref)
+    .bind(&trigger_type_str)
     .bind(&data.before_sha)
     .bind(&data.compare_url)
     .bind(data.commits_count)
@@ -197,6 +245,112 @@ pub async fn enqueue_job(
     .await?;
 
     Ok(row.0)
+}
+
+/// Enqueue a job for a pull request event
+pub async fn enqueue_pr_job(
+    pool: &PgPool,
+    repo_id: i64,
+    data: &PullRequestEventData,
+) -> Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO job (
+            repo_id, git_sha, git_ref, status, trigger_type,
+            pr_number, pr_title, pr_url, pr_author, pr_author_avatar,
+            base_ref, base_sha,
+            sender_id, sender_login, sender_avatar_url,
+            installation_id, commit_message
+        )
+        VALUES (
+            $1, $2, $3, 'queued', 'pull_request',
+            $4, $5, $6, $7, $8,
+            $9, $10,
+            $11, $12, $13,
+            $14, $15
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(repo_id)
+    .bind(&data.git_sha)
+    .bind(&data.git_ref)
+    .bind(data.pr_number)
+    .bind(&data.pr_title)
+    .bind(&data.pr_url)
+    .bind(&data.pr_author)
+    .bind(&data.pr_author_avatar)
+    .bind(&data.base_ref)
+    .bind(&data.base_sha)
+    .bind(data.sender_id)
+    .bind(&data.sender_login)
+    .bind(&data.sender_avatar_url)
+    .bind(data.installation_id)
+    .bind(&data.pr_title) // Use PR title as commit message for display
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.0)
+}
+
+/// Re-run a job by creating a new job with the same parameters
+pub async fn rerun_job(pool: &PgPool, job_id: i64) -> Result<Option<i64>> {
+    // First, get the original job
+    let original = sqlx::query(
+        r#"
+        SELECT 
+            repo_id, git_sha, git_ref, trigger_type::text,
+            pr_number, pr_title, pr_url, pr_author, pr_author_avatar,
+            base_ref, base_sha, commit_message, commit_author
+        FROM job
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(original) = original else {
+        return Ok(None);
+    };
+
+    let trigger_type: String = original.get("trigger_type");
+    
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO job (
+            repo_id, git_sha, git_ref, status, trigger_type,
+            pr_number, pr_title, pr_url, pr_author, pr_author_avatar,
+            base_ref, base_sha, commit_message, commit_author,
+            parent_job_id
+        )
+        VALUES (
+            $1, $2, $3, 'queued', $4::trigger_type,
+            $5, $6, $7, $8, $9,
+            $10, $11, $12, $13,
+            $14
+        )
+        RETURNING id
+        "#,
+    )
+    .bind(original.get::<i64, _>("repo_id"))
+    .bind(original.get::<String, _>("git_sha"))
+    .bind(original.get::<String, _>("git_ref"))
+    .bind(&trigger_type)
+    .bind(original.get::<Option<i64>, _>("pr_number"))
+    .bind(original.get::<Option<String>, _>("pr_title"))
+    .bind(original.get::<Option<String>, _>("pr_url"))
+    .bind(original.get::<Option<String>, _>("pr_author"))
+    .bind(original.get::<Option<String>, _>("pr_author_avatar"))
+    .bind(original.get::<Option<String>, _>("base_ref"))
+    .bind(original.get::<Option<String>, _>("base_sha"))
+    .bind(original.get::<Option<String>, _>("commit_message"))
+    .bind(original.get::<Option<String>, _>("commit_author"))
+    .bind(job_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(Some(row.0))
 }
 
 pub async fn upsert_repo(pool: &PgPool, data: &RepoData) -> Result<i64> {

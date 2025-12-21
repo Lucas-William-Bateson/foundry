@@ -9,9 +9,9 @@ use axum::{
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use foundry_core::{github::PushEvent, verify_github_signature, ApiResponse};
+use foundry_core::{github::{PushEvent, PullRequestEvent}, verify_github_signature, ApiResponse};
 
-use crate::{db::{self, PushEventData, RepoData}, AppState};
+use crate::{db::{self, PushEventData, PullRequestEventData, RepoData}, AppState};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/webhook/github", post(github_webhook))
@@ -60,12 +60,21 @@ async fn github_webhook(
         warn!("Failed to store webhook event: {}", e);
     }
 
-    if event_type != "push" {
-        info!("Ignoring non-push event: {}", event_type);
-        return (StatusCode::OK, Json(ApiResponse::ok()));
+    match event_type {
+        "push" => handle_push_event(&state, &body).await,
+        "pull_request" => handle_pull_request_event(&state, &body).await,
+        _ => {
+            info!("Ignoring event type: {}", event_type);
+            (StatusCode::OK, Json(ApiResponse::ok()))
+        }
     }
+}
 
-    let push: PushEvent = match serde_json::from_slice(&body) {
+async fn handle_push_event(
+    state: &Arc<AppState>,
+    body: &Bytes,
+) -> (StatusCode, Json<ApiResponse>) {
+    let push: PushEvent = match serde_json::from_slice(body) {
         Ok(p) => p,
         Err(e) => {
             error!("Failed to parse push event: {}", e);
@@ -116,6 +125,93 @@ async fn github_webhook(
                 }
                 Err(e) => {
                     error!("Failed to enqueue job: {}", e);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse::error("Failed to enqueue job")),
+                    )
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to upsert repo: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error("Failed to process repo")),
+            )
+        }
+    }
+}
+
+async fn handle_pull_request_event(
+    state: &Arc<AppState>,
+    body: &Bytes,
+) -> (StatusCode, Json<ApiResponse>) {
+    let pr_event: PullRequestEvent = match serde_json::from_slice(body) {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to parse pull_request event: {}", e);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::error("Invalid payload")),
+            );
+        }
+    };
+
+    // Only build on opened, synchronize, reopened (not closed, merged, etc.)
+    if !pr_event.should_build() {
+        info!(
+            "Ignoring PR event: action={}, draft={}",
+            pr_event.action, pr_event.pull_request.draft
+        );
+        return (StatusCode::OK, Json(ApiResponse::ok()));
+    }
+
+    let pr = &pr_event.pull_request;
+    let repo = &pr_event.repository;
+    
+    info!(
+        "Processing PR #{} ({}) for {}/{}: {} -> {}",
+        pr.number,
+        pr_event.action,
+        repo.owner.login,
+        repo.name,
+        pr.head.git_ref,
+        pr.base.git_ref,
+    );
+
+    // Extract repo data from PR event
+    let repo_data = RepoData {
+        owner: repo.owner.login.clone(),
+        name: repo.name.clone(),
+        clone_url: repo.clone_url.clone(),
+        github_id: Some(repo.id),
+        full_name: Some(repo.full_name.clone()),
+        html_url: Some(repo.html_url.clone()),
+        ssh_url: Some(repo.ssh_url.clone()),
+        private: repo.private,
+        default_branch: Some(repo.default_branch.clone()),
+        language: repo.language.clone(),
+        description: repo.description.clone(),
+    };
+
+    let pr_data = PullRequestEventData::from_pr_event(&pr_event);
+
+    match db::upsert_repo(&state.db, &repo_data).await {
+        Ok(repo_id) => {
+            match db::enqueue_pr_job(&state.db, repo_id, &pr_data).await {
+                Ok(job_id) => {
+                    info!(
+                        "Enqueued PR job {} for {}/{} PR #{} @ {}",
+                        job_id,
+                        repo.owner.login,
+                        repo.name,
+                        pr.number,
+                        &pr.head.sha[..8.min(pr.head.sha.len())],
+                    );
+                    (StatusCode::OK, Json(ApiResponse::ok()))
+                }
+                Err(e) => {
+                    error!("Failed to enqueue PR job: {}", e);
                     (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(ApiResponse::error("Failed to enqueue job")),

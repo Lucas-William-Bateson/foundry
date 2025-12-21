@@ -18,9 +18,86 @@ pub fn verify_github_signature(secret: &str, body: &[u8], header: &str) -> bool 
     mac.verify_slice(&sig_bytes).is_ok()
 }
 
-// ============================================
-// GitHub Push Event - Comprehensive Data Model
-// ============================================
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerType {
+    Push,
+    PullRequest,
+    Manual,
+}
+
+impl std::fmt::Display for TriggerType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TriggerType::Push => write!(f, "push"),
+            TriggerType::PullRequest => write!(f, "pull_request"),
+            TriggerType::Manual => write!(f, "manual"),
+        }
+    }
+}
+
+impl std::str::FromStr for TriggerType {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "push" => Ok(TriggerType::Push),
+            "pull_request" => Ok(TriggerType::PullRequest),
+            "manual" => Ok(TriggerType::Manual),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PullRequestEvent {
+    pub action: String,
+    pub number: i64,
+    pub pull_request: PullRequest,
+    pub repository: Repository,
+    pub sender: Option<Sender>,
+    pub installation: Option<Installation>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PullRequest {
+    pub id: i64,
+    pub number: i64,
+    pub state: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub html_url: String,
+    pub user: PullRequestUser,
+    pub head: PullRequestRef,
+    pub base: PullRequestRef,
+    pub draft: bool,
+    pub merged: Option<bool>,
+    pub mergeable: Option<bool>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PullRequestUser {
+    pub login: String,
+    pub id: i64,
+    pub avatar_url: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct PullRequestRef {
+    pub label: String,
+    #[serde(rename = "ref")]
+    pub git_ref: String,
+    pub sha: String,
+    pub repo: Option<Repository>,
+}
+
+impl PullRequestEvent {
+    pub fn should_build(&self) -> bool {
+        matches!(self.action.as_str(), "opened" | "synchronize" | "reopened")
+            && !self.pull_request.draft
+    }
+}
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PushEvent {

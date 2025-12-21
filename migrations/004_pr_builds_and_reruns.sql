@@ -1,0 +1,27 @@
+DO $$ BEGIN
+    CREATE TYPE trigger_type AS ENUM ('push', 'pull_request', 'manual');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+ALTER TABLE job ADD COLUMN IF NOT EXISTS trigger_type trigger_type NOT NULL DEFAULT 'push';
+ALTER TABLE job ADD COLUMN IF NOT EXISTS pr_number BIGINT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS pr_title TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS pr_url TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS pr_author TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS pr_author_avatar TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS base_ref TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS base_sha TEXT;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS parent_job_id BIGINT REFERENCES job(id);
+ALTER TABLE job ADD COLUMN IF NOT EXISTS timeout_secs INTEGER DEFAULT 1800;
+ALTER TABLE job ADD COLUMN IF NOT EXISTS timed_out BOOLEAN DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_job_pr_number ON job(repo_id, pr_number) WHERE pr_number IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_job_parent ON job(parent_job_id) WHERE parent_job_id IS NOT NULL;
+
+DO $$
+BEGIN
+    ALTER TYPE job_status ADD VALUE IF NOT EXISTS 'cancelled';
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;

@@ -4,5 +4,5 @@ pub mod types;
 pub mod cloudflare;
 
 pub use config::FoundryConfig;
-pub use github::verify_github_signature;
+pub use github::{verify_github_signature, TriggerType};
 pub use types::*;

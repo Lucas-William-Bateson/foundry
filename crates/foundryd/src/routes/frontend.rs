@@ -1,12 +1,14 @@
 use axum::{
     extract::{Path, Query, State},
-    response::Json,
-    routing::get,
+    http::StatusCode,
+    response::{IntoResponse, Json},
+    routing::{get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
+use tracing::{error, info};
 
 use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary};
 use crate::AppState;
@@ -29,6 +31,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/stats", get(api_stats))
         .route("/api/jobs", get(api_jobs))
         .route("/api/job/{id}", get(api_job))
+        .route("/api/job/{id}/rerun", post(api_rerun_job))
         .route("/api/repos", get(api_repos))
         // Serve static files, fall back to index.html for SPA routing
         .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
@@ -117,5 +120,52 @@ async fn api_job(
 async fn api_repos(State(state): State<Arc<AppState>>) -> Json<Vec<RepoSummary>> {
     let repos = db::list_repos(&state.db).await.unwrap_or_default();
     Json(repos)
+}
+
+#[derive(Serialize)]
+struct RerunResponse {
+    ok: bool,
+    job_id: Option<i64>,
+    error: Option<String>,
+}
+
+async fn api_rerun_job(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match db::rerun_job(&state.db, id).await {
+        Ok(Some(new_job_id)) => {
+            info!("Rerun job {} created as job {}", id, new_job_id);
+            (
+                StatusCode::OK,
+                Json(RerunResponse {
+                    ok: true,
+                    job_id: Some(new_job_id),
+                    error: None,
+                }),
+            )
+        }
+        Ok(None) => {
+            (
+                StatusCode::NOT_FOUND,
+                Json(RerunResponse {
+                    ok: false,
+                    job_id: None,
+                    error: Some("Job not found".to_string()),
+                }),
+            )
+        }
+        Err(e) => {
+            error!("Failed to rerun job {}: {}", id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(RerunResponse {
+                    ok: false,
+                    job_id: None,
+                    error: Some("Failed to rerun job".to_string()),
+                }),
+            )
+        }
+    }
 }
 
