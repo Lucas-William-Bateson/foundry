@@ -21,6 +21,8 @@ cd "$DEPLOY_DIR"
 
 export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/foundry/github-app.pem}"
 
+cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
+
 echo "Rebuilding containers..."
 docker compose build
 
