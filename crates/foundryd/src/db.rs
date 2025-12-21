@@ -190,3 +190,107 @@ pub async fn get_logs(
 
     Ok(Some(logs))
 }
+
+#[derive(Debug)]
+pub struct JobSummary {
+    pub id: i64,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub git_sha: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+#[derive(Debug)]
+pub struct JobDetail {
+    pub id: i64,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub git_sha: String,
+    pub git_ref: String,
+    pub status: String,
+    pub created_at: String,
+}
+
+pub async fn list_jobs(pool: &PgPool, limit: i64) -> Result<Vec<JobSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT 
+            j.id, 
+            r.owner as repo_owner, 
+            r.name as repo_name, 
+            j.git_sha, 
+            j.status::text,
+            to_char(j.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at
+        FROM job j
+        JOIN repo r ON r.id = j.repo_id
+        ORDER BY j.created_at DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| JobSummary {
+            id: r.get("id"),
+            repo_owner: r.get("repo_owner"),
+            repo_name: r.get("repo_name"),
+            git_sha: r.get("git_sha"),
+            status: r.get("status"),
+            created_at: r.get("created_at"),
+        })
+        .collect())
+}
+
+pub async fn get_job(pool: &PgPool, job_id: i64) -> Result<Option<JobDetail>> {
+    let row = sqlx::query(
+        r#"
+        SELECT 
+            j.id, 
+            r.owner as repo_owner, 
+            r.name as repo_name, 
+            j.git_sha,
+            j.git_ref,
+            j.status::text,
+            to_char(j.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at
+        FROM job j
+        JOIN repo r ON r.id = j.repo_id
+        WHERE j.id = $1
+        "#,
+    )
+    .bind(job_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| JobDetail {
+        id: r.get("id"),
+        repo_owner: r.get("repo_owner"),
+        repo_name: r.get("repo_name"),
+        git_sha: r.get("git_sha"),
+        git_ref: r.get("git_ref"),
+        status: r.get("status"),
+        created_at: r.get("created_at"),
+    }))
+}
+
+pub async fn get_job_logs(pool: &PgPool, job_id: i64) -> Result<Option<String>> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT line FROM job_log
+        WHERE job_id = $1
+        ORDER BY ts ASC
+        "#,
+    )
+    .bind(job_id)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(rows.into_iter().map(|(line,)| line).collect::<Vec<_>>().join("\n")))
+}

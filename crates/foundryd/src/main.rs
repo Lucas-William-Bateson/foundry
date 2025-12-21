@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState { db, config });
 
     let app = Router::new()
+        .merge(routes::frontend::router())
         .merge(routes::webhook::router())
         .merge(routes::agent::router())
         .merge(routes::health::router())
