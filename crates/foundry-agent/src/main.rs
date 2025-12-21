@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
                 );
 
                 let check_run_id = if let Some(ref app) = github_app {
+                    info!("Creating GitHub check run for {}/{}", job.repo_owner, job.repo_name);
                     match app
                         .create_check_run(
                             &job.repo_owner,
@@ -62,7 +63,10 @@ async fn main() -> Result<()> {
                         )
                         .await
                     {
-                        Ok(id) => Some(id),
+                        Ok(id) => {
+                            info!("Created check run with ID {}", id);
+                            Some(id)
+                        }
                         Err(e) => {
                             warn!("Failed to create check run: {}", e);
                             None
