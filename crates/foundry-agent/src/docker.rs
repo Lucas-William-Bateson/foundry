@@ -33,6 +33,14 @@ pub async fn run_job(
 
     let workspace = PathBuf::from(&config.workspace_dir).join(format!("job-{}", job.id));
 
+    // Clean up any existing workspace from a previous failed job
+    if workspace.exists() {
+        debug!("Cleaning up existing workspace: {:?}", workspace);
+        if let Err(e) = tokio::fs::remove_dir_all(&workspace).await {
+            debug!("Failed to remove existing workspace: {}", e);
+        }
+    }
+
     tokio::fs::create_dir_all(&workspace)
         .await
         .context("Failed to create workspace directory")?;

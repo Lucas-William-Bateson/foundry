@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 
+# Limit parallelism to reduce memory usage during compilation
+ENV CARGO_BUILD_JOBS=2
 RUN cargo build --release
 
 # Build frontend
