@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_URL="https://github.com/Lucas-William-Bateson/foundry.git"
 DEPLOY_DIR="/tmp/foundry-deploy"
+PROJECT_NAME="foundry"
 
 echo "=== Foundry Self-Deploy ==="
 echo "Timestamp: $(date)"
@@ -24,14 +25,14 @@ export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/found
 cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
 
 echo "Rebuilding containers..."
-docker compose build
+docker compose -p "$PROJECT_NAME" build
 
 echo "Restarting services..."
-docker compose up -d --force-recreate
+docker compose -p "$PROJECT_NAME" up -d --force-recreate
 
 echo "Cleaning up..."
 docker image prune -f
 rm -rf "$DEPLOY_DIR"
 
 echo "=== Deploy complete ==="
-docker compose ps
+docker compose -p "$PROJECT_NAME" ps
