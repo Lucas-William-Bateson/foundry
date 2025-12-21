@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct FoundryConfig {
     #[serde(default)]
     pub build: BuildConfig,
@@ -10,10 +10,63 @@ pub struct FoundryConfig {
     #[serde(default)]
     pub triggers: TriggersConfig,
     #[serde(default)]
+    pub schedule: Option<ScheduleConfig>,
+    #[serde(default)]
+    pub stages: Vec<StageConfig>,
+    #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StageConfig {
+    pub name: String,
+    #[serde(default)]
+    pub image: Option<String>,
+    pub command: String,
+    #[serde(default = "default_stage_timeout")]
+    pub timeout: u64,
+    #[serde(default)]
+    pub allow_failure: bool,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub condition: Option<StageCondition>,
+}
+
+fn default_stage_timeout() -> u64 {
+    600
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StageCondition {
+    Always,
+    OnSuccess,
+    OnFailure,
+    OnPr,
+    OnPush,
+}
+
+impl Default for StageCondition {
+    fn default() -> Self {
+        StageCondition::OnSuccess
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScheduleConfig {
+    pub cron: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BuildConfig {
     #[serde(default = "default_image")]
     pub image: String,
@@ -46,7 +99,7 @@ impl Default for BuildConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TriggersConfig {
     #[serde(default = "default_branches")]
     pub branches: Vec<String>,
@@ -91,7 +144,7 @@ impl TriggersConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct DeployConfig {
     #[serde(default)]
     pub name: Option<String>,
@@ -151,5 +204,29 @@ impl FoundryConfig {
         } else {
             default.to_string()
         }
+    }
+
+    pub fn has_stages(&self) -> bool {
+        !self.stages.is_empty()
+    }
+
+    pub fn has_dockerfile(&self) -> bool {
+        self.build.dockerfile.is_some()
+    }
+
+    pub fn stages_for_trigger(&self, is_pr: bool, previous_failed: bool) -> Vec<&StageConfig> {
+        self.stages
+            .iter()
+            .filter(|s| {
+                match &s.condition {
+                    Some(StageCondition::Always) => true,
+                    Some(StageCondition::OnSuccess) => !previous_failed,
+                    Some(StageCondition::OnFailure) => previous_failed,
+                    Some(StageCondition::OnPr) => is_pr,
+                    Some(StageCondition::OnPush) => !is_pr,
+                    None => !previous_failed,
+                }
+            })
+            .collect()
     }
 }

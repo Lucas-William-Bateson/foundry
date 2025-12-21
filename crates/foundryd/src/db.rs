@@ -555,6 +555,28 @@ pub async fn finish_job(
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn store_metrics(
+    pool: &PgPool,
+    job_id: i64,
+    claim_token: Uuid,
+    metrics: &serde_json::Value,
+) -> Result<bool> {
+    let result = sqlx::query(
+        r#"
+        UPDATE job
+        SET metrics_json = $3
+        WHERE id = $1 AND claim_token = $2
+        "#,
+    )
+    .bind(job_id)
+    .bind(claim_token)
+    .bind(metrics)
+    .execute(pool)
+    .await?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn get_logs(
     pool: &PgPool,
     job_id: i64,
@@ -607,6 +629,7 @@ pub struct JobSummary {
     pub commit_message: Option<String>,
     pub commit_author: Option<String>,
     pub duration_secs: Option<i64>,
+    pub trigger_type: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -624,6 +647,11 @@ pub struct JobDetail {
     pub commit_author: Option<String>,
     pub commit_url: Option<String>,
     pub duration_secs: Option<i64>,
+    pub trigger_type: Option<String>,
+    pub pr_number: Option<i64>,
+    pub pr_title: Option<String>,
+    pub pr_url: Option<String>,
+    pub metrics: Option<serde_json::Value>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -713,7 +741,8 @@ pub async fn list_jobs(pool: &PgPool, limit: i64) -> Result<Vec<JobSummary>> {
             to_char(j.created_at, 'YYYY-MM-DD HH24:MI:SS') as created_at,
             j.commit_message,
             j.commit_author,
-            EXTRACT(EPOCH FROM (j.finished_at - j.started_at))::bigint as duration_secs
+            EXTRACT(EPOCH FROM (j.finished_at - j.started_at))::bigint as duration_secs,
+            j.trigger_type::text as trigger_type
         FROM job j
         JOIN repo r ON r.id = j.repo_id
         ORDER BY j.created_at DESC
@@ -736,6 +765,7 @@ pub async fn list_jobs(pool: &PgPool, limit: i64) -> Result<Vec<JobSummary>> {
             commit_message: r.get("commit_message"),
             commit_author: r.get("commit_author"),
             duration_secs: r.get("duration_secs"),
+            trigger_type: r.get("trigger_type"),
         })
         .collect())
 }
@@ -756,7 +786,12 @@ pub async fn get_job(pool: &PgPool, job_id: i64) -> Result<Option<JobDetail>> {
             j.commit_message,
             j.commit_author,
             j.commit_url,
-            EXTRACT(EPOCH FROM (j.finished_at - j.started_at))::bigint as duration_secs
+            EXTRACT(EPOCH FROM (j.finished_at - j.started_at))::bigint as duration_secs,
+            j.trigger_type::text as trigger_type,
+            j.pr_number,
+            j.pr_title,
+            j.pr_url,
+            j.metrics_json as metrics
         FROM job j
         JOIN repo r ON r.id = j.repo_id
         WHERE j.id = $1
@@ -780,6 +815,11 @@ pub async fn get_job(pool: &PgPool, job_id: i64) -> Result<Option<JobDetail>> {
         commit_author: r.get("commit_author"),
         commit_url: r.get("commit_url"),
         duration_secs: r.get("duration_secs"),
+        trigger_type: r.get("trigger_type"),
+        pr_number: r.get("pr_number"),
+        pr_title: r.get("pr_title"),
+        pr_url: r.get("pr_url"),
+        metrics: r.get("metrics"),
     }))
 }
 

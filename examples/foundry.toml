@@ -1,17 +1,37 @@
 [build]
 dockerfile = "Dockerfile"
 context = "."
-command = "npm run build && npm test"
 timeout = 1800
 
 [triggers]
 branches = ["main", "master", "develop"]
 pull_requests = true
 
+[[stages]]
+name = "install"
+command = "npm ci"
+
+[[stages]]
+name = "lint"
+command = "npm run lint"
+allow_failure = true
+
+[[stages]]
+name = "test"
+command = "npm test"
+
+[[stages]]
+name = "build"
+command = "npm run build"
+
 [deploy]
 name = "my-app"
 domain = "myapp.l3s.me"
 port = 3000
+
+[schedule]
+cron = "0 0 * * *"
+branch = "main"
 
 [env]
 NODE_ENV = "production"

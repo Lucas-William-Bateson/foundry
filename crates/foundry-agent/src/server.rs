@@ -123,6 +123,36 @@ impl ServerClient {
         Ok(())
     }
 
+    pub async fn report_metrics(&self, job: &ClaimedJob, metrics: &crate::docker::JobMetrics) -> Result<()> {
+        let url = format!("{}/agent/metrics", self.server_url);
+        
+        #[derive(serde::Serialize)]
+        struct MetricsRequest {
+            job_id: i64,
+            claim_token: uuid::Uuid,
+            metrics: serde_json::Value,
+        }
+        
+        let req = MetricsRequest {
+            job_id: job.id,
+            claim_token: job.claim_token,
+            metrics: serde_json::to_value(metrics).unwrap_or_default(),
+        };
+
+        let resp = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await;
+            
+        if let Err(e) = resp {
+            debug!("Failed to report metrics: {}", e);
+        }
+
+        Ok(())
+    }
+
     pub async fn get_logs(&self, job: &ClaimedJob) -> Result<String> {
         let url = format!("{}/agent/logs/{}", self.server_url, job.id);
 

@@ -19,6 +19,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/agent/log", post(append_log))
         .route("/agent/finish", post(finish_job))
         .route("/agent/logs/{job_id}", get(get_logs))
+        .route("/agent/metrics", post(report_metrics))
 }
 
 async fn claim_job(
@@ -99,6 +100,33 @@ async fn get_logs(
         Err(e) => {
             error!("Failed to get logs: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct MetricsRequest {
+    job_id: i64,
+    claim_token: uuid::Uuid,
+    metrics: serde_json::Value,
+}
+
+async fn report_metrics(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<MetricsRequest>,
+) -> impl IntoResponse {
+    match db::store_metrics(&state.db, req.job_id, req.claim_token, &req.metrics).await {
+        Ok(true) => (StatusCode::OK, Json(ApiResponse::ok())),
+        Ok(false) => (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::error("Invalid job or token")),
+        ),
+        Err(e) => {
+            error!("Failed to store metrics: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error("Database error")),
+            )
         }
     }
 }

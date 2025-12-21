@@ -20,6 +20,7 @@ export interface Job {
   commit_author?: string;
   commit_url?: string;
   duration_secs?: number;
+  trigger_type?: "push" | "pull_request" | "manual";
 
   // Extended fields
   before_sha?: string;
@@ -31,8 +32,26 @@ export interface Job {
   sender_avatar_url?: string;
 }
 
+export interface StageMetrics {
+  name: string;
+  status: string;
+  duration_ms: number;
+  exit_code?: number;
+}
+
+export interface JobMetrics {
+  clone_duration_ms: number;
+  build_duration_ms?: number;
+  stages: StageMetrics[];
+  total_duration_ms: number;
+}
+
 export interface JobDetail extends Job {
   logs: LogEntry[];
+  pr_number?: number;
+  pr_title?: string;
+  pr_url?: string;
+  metrics?: JobMetrics;
 }
 
 export interface LogEntry {

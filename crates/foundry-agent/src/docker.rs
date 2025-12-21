@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -12,6 +13,22 @@ use foundry_core::cloudflare::CloudflareClient;
 use crate::config::Config;
 use crate::github_app::GitHubApp;
 use crate::server::ServerClient;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct JobMetrics {
+    pub clone_duration_ms: u64,
+    pub build_duration_ms: Option<u64>,
+    pub stages: Vec<StageMetrics>,
+    pub total_duration_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StageMetrics {
+    pub name: String,
+    pub status: String,
+    pub duration_ms: u64,
+    pub exit_code: Option<i32>,
+}
 
 fn is_self_deploy(job: &ClaimedJob, config: &Config) -> bool {
     if let Some(self_repo) = &config.self_repo {
@@ -27,6 +44,8 @@ pub async fn run_job(
     config: &Config,
     github_app: Option<&GitHubApp>,
 ) -> Result<()> {
+    let job_start = Instant::now();
+    
     if is_self_deploy(job, config) {
         return run_self_deploy(client, job, config, github_app).await;
     }
@@ -54,6 +73,7 @@ pub async fn run_job(
         job.clone_url.clone()
     };
 
+    let clone_start = Instant::now();
     client
         .log(
             job,
@@ -66,18 +86,25 @@ pub async fn run_job(
         .await?;
 
     clone_repo(&clone_url, &job.clone_url, &job.git_sha, &repo_dir).await?;
+    let clone_duration_ms = clone_start.elapsed().as_millis() as u64;
 
-    client.log(job, "Clone complete").await?;
+    client.log(job, &format!("Clone complete ({} ms)", clone_duration_ms)).await?;
 
     let foundry_config = FoundryConfig::load(&repo_dir);
 
     if let Some(ref fc) = foundry_config {
         client.log(job, "Found foundry.toml").await?;
+        
         if fc.deploy.is_enabled() {
             return run_deploy(client, job, &repo_dir, config, fc).await;
         }
+        
+        if fc.has_stages() {
+            return run_stages(client, job, &repo_dir, config, fc, clone_duration_ms).await;
+        }
     }
 
+    let build_start = Instant::now();
     let (image, command) = if let Some(ref fc) = foundry_config {
         let img = if fc.build.dockerfile.is_some() {
             build_image(client, job, &repo_dir, fc).await?
@@ -89,6 +116,7 @@ pub async fn run_job(
     } else {
         (job.image.clone(), config.default_command.clone())
     };
+    let build_duration_ms = build_start.elapsed().as_millis() as u64;
 
     client
         .log(job, &format!("Running in container: {}", image))
@@ -100,6 +128,16 @@ pub async fn run_job(
     client.log(job, &format!("Timeout: {} seconds", timeout_secs)).await?;
     
     let success = run_container(client, job, &repo_dir, &image, &command, env_vars, timeout_secs).await?;
+    
+    let total_duration_ms = job_start.elapsed().as_millis() as u64;
+    let metrics = JobMetrics {
+        clone_duration_ms,
+        build_duration_ms: Some(build_duration_ms),
+        stages: vec![],
+        total_duration_ms,
+    };
+    
+    client.report_metrics(job, &metrics).await.ok();
 
     if let Err(e) = tokio::fs::remove_dir_all(&workspace).await {
         debug!("Failed to cleanup workspace: {}", e);
@@ -110,6 +148,112 @@ pub async fn run_job(
     } else {
         anyhow::bail!("Container exited with non-zero status")
     }
+}
+
+async fn run_stages(
+    client: &ServerClient,
+    job: &ClaimedJob,
+    repo_dir: &PathBuf,
+    config: &Config,
+    fc: &FoundryConfig,
+    clone_duration_ms: u64,
+) -> Result<()> {
+    let job_start = Instant::now();
+    let mut stage_metrics: Vec<StageMetrics> = vec![];
+    let mut any_failed = false;
+    
+    let image = if fc.build.dockerfile.is_some() {
+        build_image(client, job, repo_dir, fc).await?
+    } else {
+        fc.build.image.clone()
+    };
+    
+    client.log(job, &format!("📋 Running {} stages", fc.stages.len())).await?;
+    
+    for (i, stage) in fc.stages.iter().enumerate() {
+        let stage_image = stage.image.as_ref().unwrap_or(&image);
+        let stage_start = Instant::now();
+        
+        let should_run = match &stage.condition {
+            Some(foundry_core::config::StageCondition::Always) => true,
+            Some(foundry_core::config::StageCondition::OnFailure) => any_failed,
+            Some(foundry_core::config::StageCondition::OnSuccess) | None => !any_failed,
+            Some(foundry_core::config::StageCondition::OnPr) => job.git_ref.starts_with("refs/pull/"),
+            Some(foundry_core::config::StageCondition::OnPush) => !job.git_ref.starts_with("refs/pull/"),
+        };
+        
+        if !should_run {
+            client.log(job, &format!("⏭️  Stage {}: {} (skipped)", i + 1, stage.name)).await?;
+            stage_metrics.push(StageMetrics {
+                name: stage.name.clone(),
+                status: "skipped".to_string(),
+                duration_ms: 0,
+                exit_code: None,
+            });
+            continue;
+        }
+        
+        client.log(job, &format!("▶️  Stage {}: {}", i + 1, stage.name)).await?;
+        
+        let mut stage_env = fc.env.clone();
+        stage_env.extend(stage.env.clone());
+        
+        let result = run_container(
+            client,
+            job,
+            repo_dir,
+            stage_image,
+            &stage.command,
+            Some(&stage_env),
+            stage.timeout,
+        ).await;
+        
+        let duration_ms = stage_start.elapsed().as_millis() as u64;
+        
+        match result {
+            Ok(true) => {
+                client.log(job, &format!("✅ Stage {} complete ({} ms)", stage.name, duration_ms)).await?;
+                stage_metrics.push(StageMetrics {
+                    name: stage.name.clone(),
+                    status: "success".to_string(),
+                    duration_ms,
+                    exit_code: Some(0),
+                });
+            }
+            Ok(false) | Err(_) => {
+                client.log(job, &format!("❌ Stage {} failed ({} ms)", stage.name, duration_ms)).await?;
+                stage_metrics.push(StageMetrics {
+                    name: stage.name.clone(),
+                    status: "failed".to_string(),
+                    duration_ms,
+                    exit_code: Some(1),
+                });
+                
+                if !stage.allow_failure {
+                    any_failed = true;
+                    if stage.condition.is_none() || stage.condition == Some(foundry_core::config::StageCondition::OnSuccess) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    let total_duration_ms = job_start.elapsed().as_millis() as u64;
+    let metrics = JobMetrics {
+        clone_duration_ms,
+        build_duration_ms: None,
+        stages: stage_metrics,
+        total_duration_ms,
+    };
+    
+    client.report_metrics(job, &metrics).await.ok();
+    
+    if any_failed {
+        anyhow::bail!("Pipeline failed")
+    }
+    
+    Ok(())
 }
 
 async fn run_self_deploy(

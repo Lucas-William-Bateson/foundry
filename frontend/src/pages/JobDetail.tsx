@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   GitCommit,
   GitBranch,
+  GitPullRequest,
   User,
   Clock,
   ExternalLink,
@@ -17,6 +18,8 @@ import {
   Loader2,
   Timer,
   RotateCcw,
+  Gauge,
+  Play,
 } from "lucide-react";
 
 export function JobDetailPage() {
@@ -232,7 +235,99 @@ export function JobDetailPage() {
         </Card>
       )}
 
-      {/* Build Logs */}
+      {job.pr_number && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <GitPullRequest className="h-4 w-4" />
+              Pull Request #{job.pr_number}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm">{job.pr_title}</p>
+            {job.pr_url && (
+              <a
+                href={job.pr_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline text-sm inline-flex items-center gap-1 mt-1"
+              >
+                View on GitHub <ExternalLink className="h-3 w-3" />
+              </a>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {job.metrics && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Gauge className="h-4 w-4" />
+              Build Metrics
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Clone</span>
+                <span>{job.metrics.clone_duration_ms}ms</span>
+              </div>
+              {job.metrics.build_duration_ms && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Build</span>
+                  <span>{job.metrics.build_duration_ms}ms</span>
+                </div>
+              )}
+              <div className="flex justify-between font-medium border-t pt-2 mt-2">
+                <span>Total</span>
+                <span>{job.metrics.total_duration_ms}ms</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {job.metrics?.stages && job.metrics.stages.length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Play className="h-4 w-4" />
+              Pipeline Stages
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {job.metrics.stages.map((stage, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between p-2 rounded bg-muted/50"
+                >
+                  <div className="flex items-center gap-2">
+                    {stage.status === "success" && (
+                      <CheckCircle2 className="h-4 w-4 text-green-500" />
+                    )}
+                    {stage.status === "failed" && (
+                      <XCircle className="h-4 w-4 text-red-500" />
+                    )}
+                    {stage.status === "skipped" && (
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    {stage.status === "running" && (
+                      <Loader2 className="h-4 w-4 text-yellow-500 animate-spin" />
+                    )}
+                    <span className="font-medium">{stage.name}</span>
+                  </div>
+                  <span className="text-muted-foreground text-sm">
+                    {stage.duration_ms}ms
+                  </span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Build Logs</CardTitle>

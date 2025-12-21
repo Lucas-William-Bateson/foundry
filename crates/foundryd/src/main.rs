@@ -2,6 +2,7 @@ mod cloudflare;
 mod config;
 mod db;
 mod routes;
+mod scheduler;
 
 use anyhow::Result;
 use axum::Router;
@@ -60,6 +61,11 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+
+    let db_pool = Arc::new(db.clone());
+    tokio::spawn(async move {
+        scheduler::run_scheduler(db_pool).await;
+    });
 
     let state = Arc::new(AppState { db, config });
 
