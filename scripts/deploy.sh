@@ -19,6 +19,8 @@ fi
 
 cd "$DEPLOY_DIR"
 
+export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/foundry/github-app.pem}"
+
 echo "Rebuilding containers..."
 docker compose build
 
