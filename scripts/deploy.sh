@@ -7,7 +7,8 @@ echo "=== Foundry Self-Deploy ==="
 echo "Timestamp: $(date)"
 
 echo "Pulling latest changes..."
-git pull origin main
+git fetch https://github.com/Lucas-William-Bateson/foundry.git main
+git reset --hard FETCH_HEAD
 
 echo "Rebuilding containers..."
 docker compose build
