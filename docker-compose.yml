@@ -64,7 +64,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - agent_workspace:/workspace
-      - .:/app:ro
+      - .:/app
       - ${GITHUB_APP_PRIVATE_KEY_FILE}:/secrets/github-app.pem:ro
     working_dir: /app
     restart: unless-stopped
