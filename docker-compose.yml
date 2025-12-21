@@ -40,10 +40,8 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
-    command: ["tunnel", "--no-autoupdate", "run"]
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${TUNNEL_TOKEN}"]
     network_mode: host
-    env_file:
-      - secrets.env
     restart: unless-stopped
 
   agent:
