@@ -11,7 +11,7 @@ use tracing::{error, info, warn};
 
 use foundry_core::{github::PushEvent, verify_github_signature, ApiResponse};
 
-use crate::{db, AppState};
+use crate::{db::{self, PushEventData, RepoData}, AppState};
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new().route("/webhook/github", post(github_webhook))
@@ -48,8 +48,17 @@ async fn github_webhook(
         .get("x-github-event")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
+    
+    let delivery_id = headers
+        .get("x-github-delivery")
+        .and_then(|v| v.to_str().ok());
 
-    info!("Received GitHub webhook: {}", event_type);
+    info!("Received GitHub webhook: {} (delivery: {:?})", event_type, delivery_id);
+
+    // Store all webhook events for debugging/replay (do this early)
+    if let Err(e) = db::store_webhook_event(&state.db, event_type, delivery_id, &body, None).await {
+        warn!("Failed to store webhook event: {}", e);
+    }
 
     if event_type != "push" {
         info!("Ignoring non-push event: {}", event_type);
@@ -67,34 +76,42 @@ async fn github_webhook(
         }
     };
 
+    // Skip deleted branches
+    if push.deleted {
+        info!("Ignoring branch deletion event");
+        return (StatusCode::OK, Json(ApiResponse::ok()));
+    }
+
     let ref_name = push.git_ref.strip_prefix("refs/heads/").unwrap_or(&push.git_ref);
     if ref_name != "main" && ref_name != "master" {
         info!("Ignoring push to non-default branch: {}", ref_name);
         return (StatusCode::OK, Json(ApiResponse::ok()));
     }
 
-    let commit_info = push.head_commit.as_ref().map(|c| db::CommitInfo {
-        message: Some(c.message.lines().next().unwrap_or(&c.message).to_string()),
-        author: c.author.username.clone().or_else(|| Some(c.author.name.clone())),
-        url: Some(c.url.clone()),
-    });
+    // Extract comprehensive data from push event
+    let repo_data = RepoData::from_push_event(&push);
+    let push_data = PushEventData::from_push_event(&push);
 
     let repo = &push.repository;
-    match db::upsert_repo(
-        &state.db,
-        &repo.owner.login,
-        &repo.name,
-        &repo.clone_url,
-    )
-    .await
-    {
+    match db::upsert_repo(&state.db, &repo_data).await {
         Ok(repo_id) => {
-            match db::enqueue_job(&state.db, repo_id, &push.after, &push.git_ref, commit_info).await {
+            match db::enqueue_job(&state.db, repo_id, &push_data).await {
                 Ok(job_id) => {
                     info!(
-                        "Enqueued job {} for {}/{} @ {}",
-                        job_id, repo.owner.login, repo.name, &push.after[..8]
+                        "Enqueued job {} for {}/{} @ {} (commits: {}, forced: {})",
+                        job_id, 
+                        repo.owner.login, 
+                        repo.name, 
+                        &push.after[..8.min(push.after.len())],
+                        push.commits.len(),
+                        push.forced
                     );
+                    
+                    // Store individual commits
+                    if let Err(e) = db::store_commits(&state.db, job_id, &push).await {
+                        warn!("Failed to store commits for job {}: {}", job_id, e);
+                    }
+                    
                     (StatusCode::OK, Json(ApiResponse::ok()))
                 }
                 Err(e) => {

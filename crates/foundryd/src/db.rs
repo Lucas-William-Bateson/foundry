@@ -2,61 +2,298 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use foundry_core::ClaimedJob;
+use foundry_core::{ClaimedJob, github::PushEvent};
 
-pub struct CommitInfo {
-    pub message: Option<String>,
-    pub author: Option<String>,
-    pub url: Option<String>,
+/// Comprehensive push event data for storage
+#[derive(Debug, Default)]
+pub struct PushEventData {
+    // Basic info
+    pub git_sha: String,
+    pub git_ref: String,
+    pub before_sha: Option<String>,
+    pub compare_url: Option<String>,
+    
+    // Commit info
+    pub commit_message: Option<String>,
+    pub commit_author: Option<String>,
+    pub commit_author_email: Option<String>,
+    pub commit_url: Option<String>,
+    pub commit_timestamp: Option<String>,
+    pub commit_tree_id: Option<String>,
+    
+    // Committer (can differ from author)
+    pub committer_name: Option<String>,
+    pub committer_email: Option<String>,
+    pub committer_username: Option<String>,
+    
+    // Files changed
+    pub files_added: Vec<String>,
+    pub files_modified: Vec<String>,
+    pub files_removed: Vec<String>,
+    
+    // Push metadata
+    pub forced: bool,
+    pub deleted: bool,
+    pub created: bool,
+    pub commits_count: i32,
+    pub distinct_commits_count: i32,
+    
+    // Pusher info
+    pub pusher_name: Option<String>,
+    pub pusher_email: Option<String>,
+    
+    // Sender (GitHub user)
+    pub sender_id: Option<i64>,
+    pub sender_login: Option<String>,
+    pub sender_avatar_url: Option<String>,
+    pub sender_type: Option<String>,
+    
+    // Installation
+    pub installation_id: Option<i64>,
+}
+
+impl PushEventData {
+    pub fn from_push_event(event: &PushEvent) -> Self {
+        let head = event.head_commit.as_ref();
+        let distinct_count = event.commits.iter().filter(|c| c.distinct).count() as i32;
+        
+        Self {
+            git_sha: event.after.clone(),
+            git_ref: event.git_ref.clone(),
+            before_sha: Some(event.before.clone()),
+            compare_url: Some(event.compare.clone()),
+            
+            commit_message: head.map(|c| c.message.lines().next().unwrap_or(&c.message).to_string()),
+            commit_author: head.and_then(|c| c.author.username.clone().or_else(|| Some(c.author.name.clone()))),
+            commit_author_email: head.map(|c| c.author.email.clone()),
+            commit_url: head.map(|c| c.url.clone()),
+            commit_timestamp: head.map(|c| c.timestamp.clone()),
+            commit_tree_id: head.map(|c| c.tree_id.clone()),
+            
+            committer_name: head.map(|c| c.committer.name.clone()),
+            committer_email: head.map(|c| c.committer.email.clone()),
+            committer_username: head.and_then(|c| c.committer.username.clone()),
+            
+            files_added: head.map(|c| c.added.clone()).unwrap_or_default(),
+            files_modified: head.map(|c| c.modified.clone()).unwrap_or_default(),
+            files_removed: head.map(|c| c.removed.clone()).unwrap_or_default(),
+            
+            forced: event.forced,
+            deleted: event.deleted,
+            created: event.created,
+            commits_count: event.commits.len() as i32,
+            distinct_commits_count: distinct_count,
+            
+            pusher_name: Some(event.pusher.name.clone()),
+            pusher_email: event.pusher.email.clone(),
+            
+            sender_id: event.sender.as_ref().map(|s| s.id),
+            sender_login: event.sender.as_ref().map(|s| s.login.clone()),
+            sender_avatar_url: event.sender.as_ref().and_then(|s| s.avatar_url.clone()),
+            sender_type: event.sender.as_ref().and_then(|s| s.sender_type.clone()),
+            
+            installation_id: event.installation.as_ref().map(|i| i.id),
+        }
+    }
+}
+
+/// Repository data for upsert
+#[derive(Debug)]
+pub struct RepoData {
+    pub owner: String,
+    pub name: String,
+    pub clone_url: String,
+    pub github_id: Option<i64>,
+    pub full_name: Option<String>,
+    pub html_url: Option<String>,
+    pub ssh_url: Option<String>,
+    pub private: bool,
+    pub default_branch: Option<String>,
+    pub language: Option<String>,
+    pub description: Option<String>,
+}
+
+impl RepoData {
+    pub fn from_push_event(event: &PushEvent) -> Self {
+        let repo = &event.repository;
+        Self {
+            owner: repo.owner.login.clone(),
+            name: repo.name.clone(),
+            clone_url: repo.clone_url.clone(),
+            github_id: Some(repo.id),
+            full_name: Some(repo.full_name.clone()),
+            html_url: Some(repo.html_url.clone()),
+            ssh_url: Some(repo.ssh_url.clone()),
+            private: repo.private,
+            default_branch: Some(repo.default_branch.clone()),
+            language: repo.language.clone(),
+            description: repo.description.clone(),
+        }
+    }
 }
 
 pub async fn enqueue_job(
     pool: &PgPool,
     repo_id: i64,
-    git_sha: &str,
-    git_ref: &str,
-    commit_info: Option<CommitInfo>,
+    data: &PushEventData,
 ) -> Result<i64> {
-    let (message, author, url) = commit_info
-        .map(|c| (c.message, c.author, c.url))
-        .unwrap_or((None, None, None));
-    
     let row: (i64,) = sqlx::query_as(
         r#"
-        INSERT INTO job (repo_id, git_sha, git_ref, status, commit_message, commit_author, commit_url)
-        VALUES ($1, $2, $3, 'queued', $4, $5, $6)
+        INSERT INTO job (
+            repo_id, git_sha, git_ref, status,
+            before_sha, compare_url, commits_count, distinct_commits_count,
+            forced, deleted, created,
+            commit_message, commit_author, commit_author_email, commit_url, commit_timestamp, commit_tree_id,
+            committer_name, committer_email, committer_username,
+            files_added, files_modified, files_removed,
+            pusher_name, pusher_email,
+            sender_id, sender_login, sender_avatar_url, sender_type,
+            installation_id
+        )
+        VALUES (
+            $1, $2, $3, 'queued',
+            $4, $5, $6, $7,
+            $8, $9, $10,
+            $11, $12, $13, $14, $15, $16,
+            $17, $18, $19,
+            $20, $21, $22,
+            $23, $24,
+            $25, $26, $27, $28,
+            $29
+        )
         RETURNING id
         "#,
     )
     .bind(repo_id)
-    .bind(git_sha)
-    .bind(git_ref)
-    .bind(message)
-    .bind(author)
-    .bind(url)
+    .bind(&data.git_sha)
+    .bind(&data.git_ref)
+    .bind(&data.before_sha)
+    .bind(&data.compare_url)
+    .bind(data.commits_count)
+    .bind(data.distinct_commits_count)
+    .bind(data.forced)
+    .bind(data.deleted)
+    .bind(data.created)
+    .bind(&data.commit_message)
+    .bind(&data.commit_author)
+    .bind(&data.commit_author_email)
+    .bind(&data.commit_url)
+    .bind(&data.commit_timestamp)
+    .bind(&data.commit_tree_id)
+    .bind(&data.committer_name)
+    .bind(&data.committer_email)
+    .bind(&data.committer_username)
+    .bind(&data.files_added)
+    .bind(&data.files_modified)
+    .bind(&data.files_removed)
+    .bind(&data.pusher_name)
+    .bind(&data.pusher_email)
+    .bind(data.sender_id)
+    .bind(&data.sender_login)
+    .bind(&data.sender_avatar_url)
+    .bind(&data.sender_type)
+    .bind(data.installation_id)
     .fetch_one(pool)
     .await?;
 
     Ok(row.0)
 }
 
-pub async fn upsert_repo(
-    pool: &PgPool,
-    owner: &str,
-    name: &str,
-    clone_url: &str,
-) -> Result<i64> {
+pub async fn upsert_repo(pool: &PgPool, data: &RepoData) -> Result<i64> {
     let row: (i64,) = sqlx::query_as(
         r#"
-        INSERT INTO repo (owner, name, clone_url)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (owner, name) DO UPDATE SET clone_url = $3
+        INSERT INTO repo (owner, name, clone_url, github_id, full_name, html_url, ssh_url, private, default_branch, language, description)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ON CONFLICT (owner, name) DO UPDATE SET 
+            clone_url = EXCLUDED.clone_url,
+            github_id = COALESCE(EXCLUDED.github_id, repo.github_id),
+            full_name = COALESCE(EXCLUDED.full_name, repo.full_name),
+            html_url = COALESCE(EXCLUDED.html_url, repo.html_url),
+            ssh_url = COALESCE(EXCLUDED.ssh_url, repo.ssh_url),
+            private = EXCLUDED.private,
+            default_branch = COALESCE(EXCLUDED.default_branch, repo.default_branch),
+            language = COALESCE(EXCLUDED.language, repo.language),
+            description = COALESCE(EXCLUDED.description, repo.description),
+            updated_at = NOW()
         RETURNING id
         "#,
     )
-    .bind(owner)
-    .bind(name)
-    .bind(clone_url)
+    .bind(&data.owner)
+    .bind(&data.name)
+    .bind(&data.clone_url)
+    .bind(data.github_id)
+    .bind(&data.full_name)
+    .bind(&data.html_url)
+    .bind(&data.ssh_url)
+    .bind(data.private)
+    .bind(&data.default_branch)
+    .bind(&data.language)
+    .bind(&data.description)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.0)
+}
+
+/// Store individual commits from a push event
+pub async fn store_commits(pool: &PgPool, job_id: i64, event: &PushEvent) -> Result<()> {
+    for commit in &event.commits {
+        sqlx::query(
+            r#"
+            INSERT INTO job_commit (
+                job_id, sha, tree_id, message,
+                author_name, author_email, author_username,
+                committer_name, committer_email, committer_username,
+                timestamp, url, added, modified, removed, distinct_commit
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            ON CONFLICT (job_id, sha) DO NOTHING
+            "#,
+        )
+        .bind(job_id)
+        .bind(&commit.id)
+        .bind(&commit.tree_id)
+        .bind(&commit.message)
+        .bind(&commit.author.name)
+        .bind(&commit.author.email)
+        .bind(&commit.author.username)
+        .bind(&commit.committer.name)
+        .bind(&commit.committer.email)
+        .bind(&commit.committer.username)
+        .bind(&commit.timestamp)
+        .bind(&commit.url)
+        .bind(&commit.added)
+        .bind(&commit.modified)
+        .bind(&commit.removed)
+        .bind(commit.distinct)
+        .execute(pool)
+        .await?;
+    }
+    Ok(())
+}
+
+/// Store raw webhook event for debugging/replay
+pub async fn store_webhook_event(
+    pool: &PgPool,
+    event_type: &str,
+    delivery_id: Option<&str>,
+    payload: &[u8],
+    job_id: Option<i64>,
+) -> Result<i64> {
+    let payload_json: serde_json::Value = serde_json::from_slice(payload).unwrap_or(serde_json::Value::Null);
+    
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO webhook_event (event_type, delivery_id, payload, job_id, processed)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+        "#,
+    )
+    .bind(event_type)
+    .bind(delivery_id)
+    .bind(payload_json)
+    .bind(job_id)
+    .bind(job_id.is_some())
     .fetch_one(pool)
     .await?;
 

@@ -18,47 +18,119 @@ pub fn verify_github_signature(secret: &str, body: &[u8], header: &str) -> bool 
     mac.verify_slice(&sig_bytes).is_ok()
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+// ============================================
+// GitHub Push Event - Comprehensive Data Model
+// ============================================
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct PushEvent {
     #[serde(rename = "ref")]
     pub git_ref: String,
+    pub before: String,
     pub after: String,
+    pub created: bool,
+    pub deleted: bool,
+    pub forced: bool,
+    pub compare: String,
+    pub commits: Vec<Commit>,
+    pub head_commit: Option<HeadCommit>,
     pub repository: Repository,
     pub pusher: Pusher,
-    pub head_commit: Option<HeadCommit>,
+    pub sender: Option<Sender>,
+    pub installation: Option<Installation>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct HeadCommit {
+    pub id: String,
+    pub tree_id: String,
     pub message: String,
-    pub author: CommitAuthor,
+    pub timestamp: String,
     pub url: String,
+    pub author: CommitPerson,
+    pub committer: CommitPerson,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct CommitAuthor {
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Commit {
+    pub id: String,
+    pub tree_id: String,
+    pub message: String,
+    pub timestamp: String,
+    pub url: String,
+    pub author: CommitPerson,
+    pub committer: CommitPerson,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub modified: Vec<String>,
+    #[serde(default)]
+    pub distinct: bool,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct CommitPerson {
     pub name: String,
+    pub email: String,
     pub username: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Repository {
     pub id: i64,
+    pub node_id: Option<String>,
     pub name: String,
     pub full_name: String,
+    pub private: bool,
+    pub owner: Owner,
+    pub html_url: String,
+    pub description: Option<String>,
+    pub fork: bool,
+    pub url: String,
     pub clone_url: String,
     pub ssh_url: String,
-    pub owner: Owner,
+    pub default_branch: String,
+    pub language: Option<String>,
+    pub topics: Option<Vec<String>>,
+    pub visibility: Option<String>,
+    pub pushed_at: Option<i64>,
+    pub created_at: Option<i64>,
+    pub updated_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Owner {
     pub login: String,
+    pub id: i64,
+    pub node_id: Option<String>,
+    pub avatar_url: Option<String>,
+    #[serde(rename = "type")]
+    pub owner_type: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct Pusher {
     pub name: String,
+    pub email: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Sender {
+    pub login: String,
+    pub id: i64,
+    pub node_id: Option<String>,
+    pub avatar_url: Option<String>,
+    #[serde(rename = "type")]
+    pub sender_type: Option<String>,
+    pub html_url: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+pub struct Installation {
+    pub id: i64,
+    pub node_id: Option<String>,
 }
 
 #[cfg(test)]
