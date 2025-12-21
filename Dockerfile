@@ -12,6 +12,14 @@ COPY crates ./crates
 
 RUN cargo build --release
 
+# Build frontend
+FROM node:22-slim AS frontend-builder
+WORKDIR /app
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
@@ -31,6 +39,7 @@ RUN curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/c
 
 COPY --from=builder /build/target/release/foundryd /usr/local/bin/
 COPY --from=builder /build/target/release/foundry-agent /usr/local/bin/
+COPY --from=frontend-builder /app/dist /app/frontend/dist
 
 COPY migrations /migrations
 

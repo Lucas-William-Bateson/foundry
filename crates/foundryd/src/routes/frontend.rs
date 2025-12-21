@@ -1,53 +1,38 @@
 use axum::{
     extract::{Path, Query, State},
-    response::{Html, Json},
+    response::Json,
     routing::get,
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary};
 use crate::AppState;
 
-const BASE_TEMPLATE: &str = include_str!("../../templates/base.html");
-const INDEX_TEMPLATE: &str = include_str!("../../templates/index.html");
-const JOB_TEMPLATE: &str = include_str!("../../templates/job.html");
-const REPOS_TEMPLATE: &str = include_str!("../../templates/repos.html");
-
 pub fn router() -> Router<Arc<AppState>> {
+    // Look for frontend dist in multiple locations
+    let static_dir = if std::path::Path::new("frontend/dist").exists() {
+        std::path::Path::new("frontend/dist")
+    } else if std::path::Path::new("/app/frontend/dist").exists() {
+        std::path::Path::new("/app/frontend/dist")
+    } else {
+        // Fallback - will fail gracefully
+        std::path::Path::new("frontend/dist")
+    };
+
+    tracing::info!("Serving frontend from: {:?}", static_dir);
+
     Router::new()
-        // HTML pages
-        .route("/", get(index))
-        .route("/job/{id}", get(job_detail))
-        .route("/repos", get(repos))
-        // JSON API
+        // JSON API routes first (more specific)
         .route("/api/stats", get(api_stats))
         .route("/api/jobs", get(api_jobs))
         .route("/api/job/{id}", get(api_job))
         .route("/api/repos", get(api_repos))
-}
-
-fn render_page(title: &str, content: &str, active_nav: &str) -> Html<String> {
-    let html = BASE_TEMPLATE
-        .replace("{{TITLE}}", title)
-        .replace("{{NAV_DASHBOARD}}", if active_nav == "dashboard" { "active" } else { "" })
-        .replace("{{NAV_REPOS}}", if active_nav == "repos" { "active" } else { "" })
-        .replace("{{CONTENT}}", content);
-    Html(html)
-}
-
-async fn index(State(_state): State<Arc<AppState>>) -> Html<String> {
-    render_page("Dashboard", INDEX_TEMPLATE, "dashboard")
-}
-
-async fn job_detail(Path(id): Path<i64>) -> Html<String> {
-    let content = JOB_TEMPLATE.replace("{{JOB_ID}}", &id.to_string());
-    render_page(&format!("Build #{}", id), &content, "")
-}
-
-async fn repos() -> Html<String> {
-    render_page("Repositories", REPOS_TEMPLATE, "repos")
+        // Serve static files, fall back to index.html for SPA routing
+        .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
+        .fallback_service(ServeFile::new(static_dir.join("index.html")))
 }
 
 // API Endpoints
