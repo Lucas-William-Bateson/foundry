@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { fetchJob, rerunJob, type JobDetail } from "@/lib/api";
+import { fetchJob, type JobDetail } from "@/lib/api";
 import { formatDuration, cn } from "@/lib/utils";
 import {
   ArrowLeft,
@@ -17,34 +17,16 @@ import {
   XCircle,
   Loader2,
   Timer,
-  RotateCcw,
   Gauge,
   Play,
 } from "lucide-react";
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const navigate = useNavigate();
   const [job, setJob] = useState<JobDetail | null>(null);
   const [loading, setLoading] = useState(true);
-  const [rerunning, setRerunning] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const logsEndRef = useRef<HTMLDivElement>(null);
-
-  const handleRerun = async () => {
-    if (!id || rerunning) return;
-    setRerunning(true);
-    try {
-      const result = await rerunJob(parseInt(id));
-      if (result.ok && result.job_id) {
-        navigate(`/job/${result.job_id}`);
-      }
-    } catch (e) {
-      console.error("Failed to rerun job:", e);
-    } finally {
-      setRerunning(false);
-    }
-  };
 
   useEffect(() => {
     if (!id) return;
@@ -131,28 +113,22 @@ export function JobDetailPage() {
             {job.repo_owner}/{job.repo_name}
           </p>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRerun}
-          disabled={
-            rerunning || job.status === "running" || job.status === "queued"
-          }
-          className="gap-2"
-        >
-          {rerunning ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RotateCcw className="h-4 w-4" />
-          )}
-          Re-run
+        <Button variant="outline" size="sm" asChild className="gap-2">
+          <a
+            href={`https://github.com/${job.repo_owner}/${job.repo_name}/commit/${job.git_sha}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <ExternalLink className="h-4 w-4" />
+            View on GitHub
+          </a>
         </Button>
         <div className={cn("flex items-center gap-2 px-4 py-2 rounded-lg", bg)}>
           <StatusIcon
             className={cn(
               "h-5 w-5",
               color,
-              job.status === "running" && "animate-spin"
+              job.status === "running" && "animate-spin",
             )}
           />
           <span className={cn("font-semibold capitalize", color)}>
@@ -359,7 +335,7 @@ export function JobDetailPage() {
                         log.level === "error" && "text-red-400",
                         log.message.toLowerCase().includes("error") &&
                           "text-red-400",
-                        log.message.includes("✓") && "text-green-400"
+                        log.message.includes("✓") && "text-green-400",
                       )}
                     >
                       {log.message}
