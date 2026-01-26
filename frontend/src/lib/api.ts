@@ -99,3 +99,41 @@ export async function fetchRepos(): Promise<Repo[]> {
   if (!res.ok) throw new Error("Failed to fetch repos");
   return res.json();
 }
+
+export interface Schedule {
+  id: number;
+  repo_id: number;
+  repo_owner: string;
+  repo_name: string;
+  cron_expression: string;
+  branch: string;
+  timezone: string;
+  enabled: boolean;
+  last_run_at?: string;
+  next_run_at?: string;
+}
+
+export async function fetchSchedules(): Promise<Schedule[]> {
+  const res = await fetch(`${API_BASE}/schedules`);
+  if (!res.ok) throw new Error("Failed to fetch schedules");
+  return res.json();
+}
+
+export async function toggleSchedule(
+  id: number,
+  enabled: boolean,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/schedule/${id}/toggle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error("Failed to toggle schedule");
+}
+
+export async function deleteSchedule(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/schedule/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete schedule");
+}

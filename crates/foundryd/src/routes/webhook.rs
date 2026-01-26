@@ -92,16 +92,31 @@ async fn handle_push_event(
     }
 
     let ref_name = push.git_ref.strip_prefix("refs/heads/").unwrap_or(&push.git_ref);
-    if ref_name != "main" && ref_name != "master" {
-        info!("Ignoring push to non-default branch: {}", ref_name);
-        return (StatusCode::OK, Json(ApiResponse::ok()));
+    let repo = &push.repository;
+    
+    // Check if this branch should trigger a build (using stored config or defaults)
+    match db::should_build_branch(&state.db, &repo.owner.login, &repo.name, ref_name).await {
+        Ok(true) => {
+            info!("Branch {} matches trigger config, proceeding with build", ref_name);
+        }
+        Ok(false) => {
+            info!("Ignoring push to non-configured branch: {}", ref_name);
+            return (StatusCode::OK, Json(ApiResponse::ok()));
+        }
+        Err(e) => {
+            warn!("Failed to check branch config, using fallback: {}", e);
+            // Fallback to default behavior
+            if ref_name != "main" && ref_name != "master" {
+                info!("Ignoring push to non-default branch: {}", ref_name);
+                return (StatusCode::OK, Json(ApiResponse::ok()));
+            }
+        }
     }
 
     // Extract comprehensive data from push event
     let repo_data = RepoData::from_push_event(&push);
     let push_data = PushEventData::from_push_event(&push);
 
-    let repo = &push.repository;
     match db::upsert_repo(&state.db, &repo_data).await {
         Ok(repo_id) => {
             match db::enqueue_job(&state.db, repo_id, &push_data).await {
@@ -168,6 +183,20 @@ async fn handle_pull_request_event(
 
     let pr = &pr_event.pull_request;
     let repo = &pr_event.repository;
+    
+    // Check if this PR should trigger a build based on target branch config
+    match db::should_build_pr(&state.db, &repo.owner.login, &repo.name, &pr.base.git_ref).await {
+        Ok(true) => {
+            info!("PR targeting {} matches config, proceeding with build", pr.base.git_ref);
+        }
+        Ok(false) => {
+            info!("Ignoring PR targeting non-configured branch: {}", pr.base.git_ref);
+            return (StatusCode::OK, Json(ApiResponse::ok()));
+        }
+        Err(e) => {
+            warn!("Failed to check PR config, proceeding with build: {}", e);
+        }
+    }
     
     info!(
         "Processing PR #{} ({}) for {}/{}: {} -> {}",

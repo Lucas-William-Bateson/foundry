@@ -77,16 +77,22 @@ async fn enqueue_scheduled_job(pool: &PgPool, scheduled: &ScheduledJobRow) -> an
     
     let git_ref = format!("refs/heads/{}", branch);
     
+    // Resolve the latest SHA for the branch via GitHub API
+    // For now, use a placeholder that the agent will resolve
+    // The agent clones by ref, so we mark it as needing resolution
+    let placeholder_sha = format!("RESOLVE:{}", branch);
+    
     sqlx::query(
         r#"
         INSERT INTO job (
             repo_id, git_sha, git_ref, status, trigger_type,
             scheduled_job_id, commit_message
         )
-        VALUES ($1, 'HEAD', $2, 'queued', 'manual', $3, $4)
+        VALUES ($1, $2, $3, 'queued', 'scheduled', $4, $5)
         "#,
     )
     .bind(scheduled.repo_id)
+    .bind(&placeholder_sha)
     .bind(&git_ref)
     .bind(scheduled.id)
     .bind(format!("Scheduled build: {}", scheduled.cron_expression))

@@ -1,13 +1,14 @@
 use axum::{
     extract::{Path, Query, State},
-    response::Json,
-    routing::get,
+    http::StatusCode,
+    response::{IntoResponse, Json},
+    routing::{delete, get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary};
+use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, ScheduleSummary};
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -29,6 +30,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/jobs", get(api_jobs))
         .route("/api/job/{id}", get(api_job))
         .route("/api/repos", get(api_repos))
+        .route("/api/schedules", get(api_schedules))
+        .route("/api/schedule/{id}/toggle", post(api_toggle_schedule))
+        .route("/api/schedule/{id}", delete(api_delete_schedule))
         // Serve static files, fall back to index.html for SPA routing
         .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
         .fallback_service(ServeFile::new(static_dir.join("index.html")))
@@ -116,4 +120,37 @@ async fn api_job(
 async fn api_repos(State(state): State<Arc<AppState>>) -> Json<Vec<RepoSummary>> {
     let repos = db::list_repos(&state.db).await.unwrap_or_default();
     Json(repos)
+}
+
+async fn api_schedules(State(state): State<Arc<AppState>>) -> Json<Vec<ScheduleSummary>> {
+    let schedules = db::list_schedules(&state.db).await.unwrap_or_default();
+    Json(schedules)
+}
+
+#[derive(Deserialize)]
+struct ToggleScheduleRequest {
+    enabled: bool,
+}
+
+async fn api_toggle_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Json(req): Json<ToggleScheduleRequest>,
+) -> impl IntoResponse {
+    match db::toggle_schedule(&state.db, id, req.enabled).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "Schedule not found"}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+async fn api_delete_schedule(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match db::delete_schedule_by_id(&state.db, id).await {
+        Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "Schedule not found"}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
 }

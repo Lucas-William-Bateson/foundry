@@ -4,6 +4,7 @@ use tracing::debug;
 
 use foundry_core::{
     ApiResponse, ClaimRequest, ClaimResponse, ClaimedJob, FinishRequest, LogRequest,
+    SyncScheduleRequest, SyncTriggersRequest,
 };
 
 use crate::config::Config;
@@ -169,5 +170,68 @@ impl ServerClient {
         }
 
         resp.text().await.context("Failed to read logs response")
+    }
+
+    pub async fn sync_schedule(
+        &self,
+        job: &ClaimedJob,
+        schedule: Option<&foundry_core::ScheduleConfig>,
+    ) -> Result<()> {
+        let url = format!("{}/agent/schedule", self.server_url);
+        
+        let req = SyncScheduleRequest {
+            repo_id: job.repo_id,
+            claim_token: job.claim_token,
+            cron: schedule.map(|s| s.cron.clone()),
+            branch: schedule.and_then(|s| s.branch.clone()),
+            timezone: schedule.and_then(|s| s.timezone.clone()),
+            enabled: schedule.map(|s| s.enabled).unwrap_or(false),
+        };
+
+        let resp: ApiResponse = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if !resp.ok {
+            anyhow::bail!("Failed to sync schedule: {:?}", resp.error);
+        }
+
+        Ok(())
+    }
+
+    pub async fn sync_triggers(
+        &self,
+        job: &ClaimedJob,
+        triggers: &foundry_core::config::TriggersConfig,
+    ) -> Result<()> {
+        let url = format!("{}/agent/triggers", self.server_url);
+        
+        let req = SyncTriggersRequest {
+            repo_id: job.repo_id,
+            claim_token: job.claim_token,
+            branches: triggers.branches.clone(),
+            pull_requests: triggers.pull_requests,
+            pr_target_branches: triggers.pr_target_branches.clone(),
+        };
+
+        let resp: ApiResponse = self
+            .client
+            .post(&url)
+            .json(&req)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if !resp.ok {
+            anyhow::bail!("Failed to sync triggers: {:?}", resp.error);
+        }
+
+        Ok(())
     }
 }

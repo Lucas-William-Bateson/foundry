@@ -73,6 +73,14 @@ pub async fn run_job(
         job.clone_url.clone()
     };
 
+    // For scheduled jobs, git_sha starts with "RESOLVE:" - we clone by branch and resolve later
+    let (clone_ref, is_scheduled) = if job.git_sha.starts_with("RESOLVE:") {
+        let branch = job.git_sha.strip_prefix("RESOLVE:").unwrap_or("main");
+        (branch.to_string(), true)
+    } else {
+        (job.git_sha.clone(), false)
+    };
+
     let clone_start = Instant::now();
     client
         .log(
@@ -80,12 +88,12 @@ pub async fn run_job(
             &format!(
                 "Cloning {} @ {}",
                 job.clone_url,
-                &job.git_sha[..8.min(job.git_sha.len())]
+                if is_scheduled { &job.git_ref } else { &clone_ref[..8.min(clone_ref.len())] }
             ),
         )
         .await?;
 
-    clone_repo(&clone_url, &job.clone_url, &job.git_sha, &repo_dir).await?;
+    clone_repo(&clone_url, &job.clone_url, &clone_ref, &repo_dir, is_scheduled).await?;
     let clone_duration_ms = clone_start.elapsed().as_millis() as u64;
 
     client.log(job, &format!("Clone complete ({} ms)", clone_duration_ms)).await?;
@@ -94,6 +102,21 @@ pub async fn run_job(
 
     if let Some(ref fc) = foundry_config {
         client.log(job, "Found foundry.toml").await?;
+        
+        // Sync schedule configuration from foundry.toml to the server
+        if let Err(e) = client.sync_schedule(job, fc.schedule.as_ref()).await {
+            client.log(job, &format!("⚠️  Failed to sync schedule: {}", e)).await?;
+        } else if fc.schedule.is_some() {
+            let sched = fc.schedule.as_ref().unwrap();
+            client.log(job, &format!("📅 Schedule synced: {}", sched.cron)).await?;
+        }
+        
+        // Sync trigger configuration
+        if let Err(e) = client.sync_triggers(job, &fc.triggers).await {
+            client.log(job, &format!("⚠️  Failed to sync triggers: {}", e)).await?;
+        } else {
+            client.log(job, &format!("🎯 Triggers synced: branches={:?}", fc.triggers.branches)).await?;
+        }
         
         if fc.deploy.is_enabled() {
             return run_deploy(client, job, &repo_dir, config, fc).await;
@@ -333,9 +356,19 @@ async fn run_self_deploy(
     }
 }
 
-async fn clone_repo(url: &str, safe_url: &str, sha: &str, dest: &PathBuf) -> Result<()> {
+async fn clone_repo(url: &str, safe_url: &str, sha_or_branch: &str, dest: &PathBuf, clone_by_branch: bool) -> Result<()> {
+    let mut args = vec!["clone", "--depth", "50"];
+    
+    // If cloning by branch (scheduled jobs), specify the branch explicitly
+    if clone_by_branch {
+        args.push("-b");
+        args.push(sha_or_branch);
+    }
+    
+    args.push(url);
+    
     let output = Command::new("git")
-        .args(["clone", "--depth", "50", url])
+        .args(&args)
         .arg(dest)
         .env("GIT_TERMINAL_PROMPT", "0")
         .output()
@@ -348,16 +381,20 @@ async fn clone_repo(url: &str, safe_url: &str, sha: &str, dest: &PathBuf) -> Res
         anyhow::bail!("git clone failed: {}", sanitized);
     }
 
-    let output = Command::new("git")
-        .args(["checkout", sha])
-        .current_dir(dest)
-        .output()
-        .await
-        .context("Failed to run git checkout")?;
+    // For scheduled jobs, we're already on the right branch after clone
+    // For regular jobs, checkout the specific SHA
+    if !clone_by_branch {
+        let output = Command::new("git")
+            .args(["checkout", sha_or_branch])
+            .current_dir(dest)
+            .output()
+            .await
+            .context("Failed to run git checkout")?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git checkout failed: {}", stderr);
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git checkout failed: {}", stderr);
+        }
     }
 
     Ok(())

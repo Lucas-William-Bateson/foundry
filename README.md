@@ -66,6 +66,12 @@ branches = ["main", "master"]  # Branches to build on push
 pull_requests = true           # Build pull requests (default: true)
 # pr_target_branches = ["main"] # Only build PRs targeting these branches
 
+[schedule]
+cron = "0 0 * * *"           # Run daily at midnight
+branch = "main"              # Branch to build
+enabled = true               # Toggle schedule on/off
+timezone = "UTC"             # Timezone for cron expression
+
 [deploy]
 name = "my-app"              # Container/project name (triggers deploy mode)
 domain = "myapp.l3s.me"      # Your app's domain (auto-configured via Cloudflare)
@@ -87,6 +93,11 @@ NODE_ENV = "production"
 - **Push builds**: Triggered when pushing to branches listed in `triggers.branches`
 - **Pull request builds**: Triggered on PR open/sync if `triggers.pull_requests = true`
 - **Re-runs**: Any completed build can be re-run from the dashboard
+- **Scheduled builds**: Triggered by cron expression in `[schedule]` section
+
+**Scheduled Builds:**
+
+The `[schedule]` section allows you to run builds on a cron schedule. The schedule is synced from your `foundry.toml` to the server on each build, so you can update it by pushing changes. Schedules can be viewed, toggled, and deleted from the dashboard.
 
 **Timeouts:**
 
@@ -157,7 +168,6 @@ cargo run -p foundry-agent
 Foundry has built-in Cloudflare tunnel support via the API. This creates a persistent tunnel with your custom domain.
 
 1. **Get your Cloudflare credentials**:
-
    - Account ID: Dashboard → right sidebar → "Account ID"
    - Zone ID: Dashboard → your domain → right sidebar → "Zone ID"
    - API Token: Profile → API Tokens → Create Token

@@ -52,6 +52,25 @@ pub struct FinishRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncScheduleRequest {
+    pub repo_id: i64,
+    pub claim_token: Uuid,
+    pub cron: Option<String>,
+    pub branch: Option<String>,
+    pub timezone: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncTriggersRequest {
+    pub repo_id: i64,
+    pub claim_token: Uuid,
+    pub branches: Vec<String>,
+    pub pull_requests: bool,
+    pub pr_target_branches: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiResponse {
     pub ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

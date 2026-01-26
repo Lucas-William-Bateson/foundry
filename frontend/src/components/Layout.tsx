@@ -1,10 +1,17 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Factory, LayoutDashboard, GitBranch, Settings } from "lucide-react";
+import {
+  Factory,
+  LayoutDashboard,
+  GitBranch,
+  Settings,
+  Calendar,
+} from "lucide-react";
 
 const navigation = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Repositories", href: "/repos", icon: GitBranch },
+  { name: "Schedules", href: "/schedules", icon: Calendar },
 ];
 
 export function Layout() {
@@ -36,7 +43,7 @@ export function Layout() {
                             isActive
                               ? "bg-accent text-accent-foreground"
                               : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                            "group flex gap-x-3 rounded-md p-2 text-sm font-semibold leading-6"
+                            "group flex gap-x-3 rounded-md p-2 text-sm font-semibold leading-6",
                           )}
                         >
                           <item.icon

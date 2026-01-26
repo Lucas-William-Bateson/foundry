@@ -6,6 +6,7 @@ timeout = 1800
 [triggers]
 branches = ["main", "master", "develop"]
 pull_requests = true
+# pr_target_branches = ["main"]  # Only build PRs targeting main
 
 [[stages]]
 name = "install"
@@ -30,8 +31,10 @@ domain = "myapp.l3s.me"
 port = 3000
 
 [schedule]
-cron = "0 0 * * *"
+cron = "0 0 * * *"  # Run daily at midnight UTC
 branch = "main"
+enabled = true
+timezone = "UTC"
 
 [env]
 NODE_ENV = "production"
