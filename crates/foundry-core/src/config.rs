@@ -158,6 +158,8 @@ pub struct DeployConfig {
     pub compose_file: Option<String>,
     #[serde(default)]
     pub healthcheck: Option<String>,
+    #[serde(default)]
+    pub volumes: Option<Vec<String>>,
 }
 
 impl DeployConfig {

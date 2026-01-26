@@ -506,6 +506,14 @@ async fn run_deploy(
             args.push(format!("{}:{}", port, port));
         }
 
+        // Add volume mounts
+        if let Some(volumes) = &fc.deploy.volumes {
+            for vol in volumes {
+                args.push("-v".to_string());
+                args.push(vol.clone());
+            }
+        }
+
         for (key, value) in &fc.env {
             args.push("-e".to_string());
             args.push(format!("{}={}", key, value));
