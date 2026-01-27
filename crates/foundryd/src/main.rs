@@ -5,6 +5,7 @@ mod db;
 mod docker;
 mod routes;
 mod scheduler;
+mod watchdog;
 
 use anyhow::Result;
 use axum::Router;
@@ -97,6 +98,9 @@ async fn main() -> Result<()> {
     };
 
     let state = Arc::new(AppState { db, config, auth });
+
+    // Start the agent watchdog
+    watchdog::start_agent_watchdog();
 
     // Build the router with optional auth protection
     let mut app = Router::new()

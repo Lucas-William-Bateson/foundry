@@ -2,6 +2,7 @@ mod config;
 mod docker;
 mod github_app;
 mod server;
+mod watchdog;
 
 use std::time::Duration;
 
@@ -40,6 +41,9 @@ async fn main() -> Result<()> {
     };
 
     let client = ServerClient::new(&config);
+
+    // Start the foundryd watchdog
+    watchdog::start_foundryd_watchdog();
 
     loop {
         match client.claim_job().await {

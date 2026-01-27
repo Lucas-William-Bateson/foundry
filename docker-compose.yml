@@ -56,6 +56,11 @@ services:
     depends_on:
       foundryd:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "foundry-agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     environment:
       FOUNDRY_SERVER_URL: http://foundryd:8081
       FOUNDRY_AGENT_ID: docker-agent
