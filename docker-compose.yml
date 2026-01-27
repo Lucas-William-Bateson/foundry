@@ -65,7 +65,7 @@ services:
       - agent_workspace:/workspace
       - .:/app
       - ${GITHUB_APP_PRIVATE_KEY_FILE}:/secrets/github-app.pem:ro
-      - ${HOME}/foundry:/Users/lucas/foundry:ro
+      - /Users/lucas/foundry:/Users/lucas/foundry:ro
     working_dir: /app
     restart: unless-stopped
 
