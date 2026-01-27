@@ -456,13 +456,25 @@ async fn run_deploy(
 
         let compose_path = repo_dir.join(compose_file);
 
+        let mut args = vec![
+            "compose".to_string(),
+            "-f".to_string(),
+            compose_path.to_string_lossy().to_string(),
+            "-p".to_string(),
+            app_name.to_string(),
+        ];
+
+        // Add env file if specified (absolute path on host)
+        if let Some(env_file) = &fc.deploy.env_file {
+            client.log(job, &format!("Using env file: {}", env_file)).await?;
+            args.push("--env-file".to_string());
+            args.push(env_file.clone());
+        }
+
+        args.extend(["up", "-d", "--build", "--force-recreate"].iter().map(|s| s.to_string()));
+
         let output = Command::new("docker")
-            .args([
-                "compose",
-                "-f", &compose_path.to_string_lossy(),
-                "-p", app_name,
-                "up", "-d", "--build", "--force-recreate",
-            ])
+            .args(&args)
             .current_dir(repo_dir)
             .output()
             .await

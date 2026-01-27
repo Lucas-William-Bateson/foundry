@@ -160,6 +160,8 @@ pub struct DeployConfig {
     pub healthcheck: Option<String>,
     #[serde(default)]
     pub volumes: Option<Vec<String>>,
+    #[serde(default)]
+    pub env_file: Option<String>,
 }
 
 impl DeployConfig {
