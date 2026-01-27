@@ -205,7 +205,7 @@ async fn login(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoR
         .path("/")
         .http_only(true)
         .secure(true)
-        .same_site(SameSite::Lax)
+        .same_site(SameSite::None)
         .max_age(time::Duration::minutes(10))
         .build();
 
