@@ -32,6 +32,10 @@ services:
       FOUNDRY_ENABLE_TUNNEL: "false"
       CF_TUNNEL_NAME: mini_server
       CF_TUNNEL_DOMAIN: foundry.l3s.me
+      # Auth env vars are loaded from secrets.env:
+      # FOUNDRY_AUTH_ENABLED, FOUNDRY_AUTH_ISSUER_URL, FOUNDRY_AUTH_CLIENT_ID,
+      # FOUNDRY_AUTH_CLIENT_SECRET, FOUNDRY_AUTH_REDIRECT_URL, FOUNDRY_AUTH_COOKIE_SECRET,
+      # FOUNDRY_AUTH_ALLOWED_EMAILS
     env_file:
       - secrets.env
     ports:

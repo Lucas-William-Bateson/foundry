@@ -1,3 +1,4 @@
+mod auth;
 mod cloudflare;
 mod config;
 mod db;
@@ -13,12 +14,14 @@ use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::auth::AuthState;
 use crate::cloudflare::{CloudflareConfig, CloudflareTunnel};
 use crate::config::Config;
 
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,
+    pub auth: Option<AuthState>,
 }
 
 #[tokio::main]
@@ -74,13 +77,39 @@ async fn main() -> Result<()> {
         scheduler::run_scheduler(db_pool).await;
     });
 
-    let state = Arc::new(AppState { db, config });
+    // Initialize auth if enabled
+    let auth = if let Some(auth_config) = &config.auth {
+        info!("Initializing OIDC authentication...");
+        match AuthState::new(auth_config.clone()).await {
+            Ok(auth_state) => {
+                info!("OIDC authentication initialized successfully");
+                Some(auth_state)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize OIDC auth: {}. Running without auth.", e);
+                None
+            }
+        }
+    } else {
+        info!("Authentication disabled");
+        None
+    };
 
-    let app = Router::new()
+    let state = Arc::new(AppState { db, config, auth });
+
+    // Build the router with optional auth protection
+    let mut app = Router::new()
         .merge(routes::frontend::router())
         .merge(routes::webhook::router())
         .merge(routes::agent::router())
-        .merge(routes::health::router())
+        .merge(routes::health::router());
+    
+    // Add auth routes if auth is enabled
+    if state.auth.is_some() {
+        app = app.merge(auth::router());
+    }
+    
+    let app = app
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 

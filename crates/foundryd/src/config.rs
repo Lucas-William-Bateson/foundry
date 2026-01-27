@@ -8,6 +8,7 @@ pub struct Config {
     pub database_url: String,
     pub github_webhook_secret: String,
     pub tunnel: Option<TunnelConfig>,
+    pub auth: Option<AuthConfig>,
 }
 
 impl fmt::Debug for Config {
@@ -18,6 +19,7 @@ impl fmt::Debug for Config {
             .field("database_url", &"[REDACTED]")
             .field("github_webhook_secret", &"[REDACTED]")
             .field("tunnel", &self.tunnel)
+            .field("auth", &self.auth)
             .finish()
     }
 }
@@ -39,6 +41,29 @@ impl fmt::Debug for TunnelConfig {
             .field("cf_zone_id", &"[REDACTED]")
             .field("tunnel_name", &self.tunnel_name)
             .field("domain", &self.domain)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct AuthConfig {
+    pub issuer_url: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_url: String,
+    pub cookie_secret: String,
+    pub allowed_emails: Vec<String>,
+}
+
+impl fmt::Debug for AuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AuthConfig")
+            .field("issuer_url", &self.issuer_url)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("redirect_url", &self.redirect_url)
+            .field("cookie_secret", &"[REDACTED]")
+            .field("allowed_emails", &self.allowed_emails)
             .finish()
     }
 }
@@ -74,6 +99,32 @@ impl Config {
             None
         };
 
+        let auth = if std::env::var("FOUNDRY_AUTH_ENABLED")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false)
+        {
+            Some(AuthConfig {
+                issuer_url: std::env::var("FOUNDRY_AUTH_ISSUER_URL")
+                    .context("FOUNDRY_AUTH_ISSUER_URL required when auth enabled")?,
+                client_id: std::env::var("FOUNDRY_AUTH_CLIENT_ID")
+                    .context("FOUNDRY_AUTH_CLIENT_ID required when auth enabled")?,
+                client_secret: std::env::var("FOUNDRY_AUTH_CLIENT_SECRET")
+                    .context("FOUNDRY_AUTH_CLIENT_SECRET required when auth enabled")?,
+                redirect_url: std::env::var("FOUNDRY_AUTH_REDIRECT_URL")
+                    .context("FOUNDRY_AUTH_REDIRECT_URL required when auth enabled")?,
+                cookie_secret: std::env::var("FOUNDRY_AUTH_COOKIE_SECRET")
+                    .context("FOUNDRY_AUTH_COOKIE_SECRET required when auth enabled")?,
+                allowed_emails: std::env::var("FOUNDRY_AUTH_ALLOWED_EMAILS")
+                    .unwrap_or_default()
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            })
+        } else {
+            None
+        };
+
         Ok(Self {
             bind_addr,
             bind_port,
@@ -82,6 +133,7 @@ impl Config {
             github_webhook_secret: std::env::var("GITHUB_WEBHOOK_SECRET")
                 .context("GITHUB_WEBHOOK_SECRET must be set")?,
             tunnel,
+            auth,
         })
     }
 }

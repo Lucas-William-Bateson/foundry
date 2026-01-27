@@ -1,11 +1,12 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
 import {
   Factory,
   LayoutDashboard,
   GitBranch,
-  Settings,
   Calendar,
+  LogOut,
 } from "lucide-react";
 
 const navigation = [
@@ -16,6 +17,7 @@ const navigation = [
 
 export function Layout() {
   const location = useLocation();
+  const { email, logout } = useAuth();
 
   return (
     <div className="min-h-screen bg-background">
@@ -57,14 +59,19 @@ export function Layout() {
                   })}
                 </ul>
               </li>
-              <li className="mt-auto">
-                <Link
-                  to="/settings"
-                  className="group -mx-2 flex gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              <li className="mt-auto space-y-2">
+                {email && (
+                  <div className="px-2 py-1 text-xs text-muted-foreground truncate">
+                    {email}
+                  </div>
+                )}
+                <button
+                  onClick={logout}
+                  className="group -mx-2 flex w-full gap-x-3 rounded-md p-2 text-sm font-semibold leading-6 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 >
-                  <Settings className="h-5 w-5 shrink-0" aria-hidden="true" />
-                  Settings
-                </Link>
+                  <LogOut className="h-5 w-5 shrink-0" aria-hidden="true" />
+                  Sign out
+                </button>
               </li>
             </ul>
           </nav>

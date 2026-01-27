@@ -12,7 +12,9 @@ foundry-core = { path = "../foundry-core" }
 
 tokio = { workspace = true, features = ["full", "process"] }
 axum = "0.8"
+axum-extra = { version = "0.10", features = ["cookie"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
+tower = "0.5"
 
 serde.workspace = true
 serde_json.workspace = true
@@ -29,3 +31,10 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 base64 = "0.22"
 bytes = "1"
 cron = "0.15"
+
+# Auth
+jsonwebtoken = "9"
+oauth2 = "5.0.0-rc.1"
+rand = "0.8"
+urlencoding = "2.1"
+time = "0.3"
