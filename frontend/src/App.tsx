@@ -3,6 +3,7 @@ import { Layout } from "@/components/Layout";
 import { Dashboard } from "@/pages/Dashboard";
 import { JobDetailPage } from "@/pages/JobDetail";
 import { Repositories } from "@/pages/Repositories";
+import { RepoDetailPage } from "@/pages/RepoDetail";
 import { Schedules } from "@/pages/Schedules";
 import { AuthProvider, RequireAuth } from "@/lib/auth";
 
@@ -16,6 +17,7 @@ function App() {
               <Route index element={<Dashboard />} />
               <Route path="job/:id" element={<JobDetailPage />} />
               <Route path="repos" element={<Repositories />} />
+              <Route path="repo/:id" element={<RepoDetailPage />} />
               <Route path="schedules" element={<Schedules />} />
             </Route>
           </Routes>

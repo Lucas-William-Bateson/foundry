@@ -74,6 +74,23 @@ export interface Repo {
   language?: string;
 }
 
+export interface RepoDetail {
+  id: number;
+  owner: string;
+  name: string;
+  full_name?: string;
+  html_url?: string;
+  description?: string;
+  language?: string;
+  default_branch?: string;
+  private: boolean;
+  build_count: number;
+  success_count: number;
+  failure_count: number;
+  last_build_at?: string;
+  created_at: string;
+}
+
 const API_BASE = "/api";
 
 export async function fetchStats(): Promise<DashboardStats> {
@@ -97,6 +114,18 @@ export async function fetchJob(id: number): Promise<JobDetail | null> {
 export async function fetchRepos(): Promise<Repo[]> {
   const res = await fetch(`${API_BASE}/repos`);
   if (!res.ok) throw new Error("Failed to fetch repos");
+  return res.json();
+}
+
+export async function fetchRepo(id: number): Promise<RepoDetail> {
+  const res = await fetch(`${API_BASE}/repo/${id}`);
+  if (!res.ok) throw new Error("Failed to fetch repo");
+  return res.json();
+}
+
+export async function fetchRepoJobs(id: number, limit = 50): Promise<Job[]> {
+  const res = await fetch(`${API_BASE}/repo/${id}/jobs?limit=${limit}`);
+  if (!res.ok) throw new Error("Failed to fetch repo jobs");
   return res.json();
 }
 

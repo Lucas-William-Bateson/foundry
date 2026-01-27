@@ -8,7 +8,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, ScheduleSummary};
+use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoDetail, RepoSummary, ScheduleSummary};
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -30,6 +30,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/jobs", get(api_jobs))
         .route("/api/job/{id}", get(api_job))
         .route("/api/repos", get(api_repos))
+        .route("/api/repo/{id}", get(api_repo))
+        .route("/api/repo/{id}/jobs", get(api_repo_jobs))
         .route("/api/schedules", get(api_schedules))
         .route("/api/schedule/{id}/toggle", post(api_toggle_schedule))
         .route("/api/schedule/{id}", delete(api_delete_schedule))
@@ -120,6 +122,32 @@ async fn api_job(
 async fn api_repos(State(state): State<Arc<AppState>>) -> Json<Vec<RepoSummary>> {
     let repos = db::list_repos(&state.db).await.unwrap_or_default();
     Json(repos)
+}
+
+async fn api_repo(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    match db::get_repo(&state.db, id).await {
+        Ok(Some(repo)) => Json(serde_json::json!(repo)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Repo not found"}))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct RepoJobsQuery {
+    limit: Option<i32>,
+}
+
+async fn api_repo_jobs(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+    Query(query): Query<RepoJobsQuery>,
+) -> Json<Vec<JobSummary>> {
+    let limit = query.limit.unwrap_or(50) as i64;
+    let jobs = db::get_repo_jobs(&state.db, id, limit).await.unwrap_or_default();
+    Json(jobs)
 }
 
 async fn api_schedules(State(state): State<Arc<AppState>>) -> Json<Vec<ScheduleSummary>> {

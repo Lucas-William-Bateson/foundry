@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { fetchRepos, type Repo } from "@/lib/api";
@@ -56,10 +57,8 @@ export function Repositories() {
                 : null;
 
             return (
-              <Card
-                key={repo.id}
-                className="hover:border-primary/50 transition-colors"
-              >
+              <Link to={`/repo/${repo.id}`} key={repo.id}>
+                <Card className="hover:border-primary/50 transition-colors cursor-pointer h-full">
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div>
@@ -139,6 +138,7 @@ export function Repositories() {
                       href={repo.html_url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
                       className="mt-4 flex items-center justify-center gap-2 text-sm text-primary hover:underline"
                     >
                       View on GitHub
@@ -147,6 +147,7 @@ export function Repositories() {
                   )}
                 </CardContent>
               </Card>
+              </Link>
             );
           })}
         </div>

@@ -751,6 +751,97 @@ pub async fn list_repos(pool: &PgPool) -> Result<Vec<RepoSummary>> {
         .collect())
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct RepoDetail {
+    pub id: i64,
+    pub owner: String,
+    pub name: String,
+    pub full_name: Option<String>,
+    pub html_url: Option<String>,
+    pub description: Option<String>,
+    pub language: Option<String>,
+    pub default_branch: Option<String>,
+    pub private: bool,
+    pub build_count: i32,
+    pub success_count: i32,
+    pub failure_count: i32,
+    pub last_build_at: Option<String>,
+    pub created_at: String,
+}
+
+pub async fn get_repo(pool: &PgPool, id: i64) -> Result<Option<RepoDetail>> {
+    let row = sqlx::query(
+        r#"
+        SELECT 
+            id, owner, name, full_name, html_url, description, language,
+            default_branch, private, build_count, success_count, failure_count,
+            to_char(last_build_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as last_build_at,
+            to_char(created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at
+        FROM repo
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| RepoDetail {
+        id: r.get("id"),
+        owner: r.get("owner"),
+        name: r.get("name"),
+        full_name: r.get("full_name"),
+        html_url: r.get("html_url"),
+        description: r.get("description"),
+        language: r.get("language"),
+        default_branch: r.get("default_branch"),
+        private: r.get("private"),
+        build_count: r.get("build_count"),
+        success_count: r.get("success_count"),
+        failure_count: r.get("failure_count"),
+        last_build_at: r.get("last_build_at"),
+        created_at: r.get("created_at"),
+    }))
+}
+
+pub async fn get_repo_jobs(pool: &PgPool, repo_id: i64, limit: i64) -> Result<Vec<JobSummary>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT 
+            j.id, r.owner as repo_owner, r.name as repo_name,
+            j.git_sha, j.status,
+            to_char(j.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at,
+            j.commit_message, j.commit_author,
+            EXTRACT(EPOCH FROM (COALESCE(j.finished_at, now()) - j.started_at))::int as duration_secs,
+            j.trigger_type
+        FROM job j
+        JOIN repo r ON r.id = j.repo_id
+        WHERE j.repo_id = $1
+        ORDER BY j.created_at DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(repo_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| JobSummary {
+            id: r.get("id"),
+            repo_owner: r.get("repo_owner"),
+            repo_name: r.get("repo_name"),
+            git_sha: r.get("git_sha"),
+            status: r.get("status"),
+            created_at: r.get("created_at"),
+            commit_message: r.get("commit_message"),
+            commit_author: r.get("commit_author"),
+            duration_secs: r.get("duration_secs"),
+            trigger_type: r.get("trigger_type"),
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScheduleSummary {
     pub id: i64,
