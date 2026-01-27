@@ -34,11 +34,9 @@ docker compose -p "$PROJECT_NAME" up -d --force-recreate --no-deps postgres foun
 echo "Waiting for foundryd to be healthy..."
 sleep 10
 
-echo "Restarting agent with new code..."
-docker compose -p "$PROJECT_NAME" up -d --force-recreate --no-deps agent
+echo "Scheduling agent restart..."
+# Run agent restart in background and detach - the current agent container
+# can't restart itself while this script is running inside it
+nohup sh -c "sleep 2 && cd $DEPLOY_DIR && docker compose -p $PROJECT_NAME up -d --force-recreate --no-deps agent && docker image prune -f && rm -rf $DEPLOY_DIR" > /tmp/agent-restart.log 2>&1 &
 
-echo "Cleaning up..."
-docker image prune -f
-rm -rf "$DEPLOY_DIR"
-
-echo "=== Deploy complete ==="
+echo "=== Deploy complete (agent will restart in background) ==="
