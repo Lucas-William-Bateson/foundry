@@ -38,6 +38,8 @@ services:
       # FOUNDRY_AUTH_ALLOWED_EMAILS
     env_file:
       - secrets.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8081:8081"
     restart: unless-stopped

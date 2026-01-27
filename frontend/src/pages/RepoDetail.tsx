@@ -1,13 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   fetchRepo,
   fetchRepoJobs,
+  fetchContainers,
+  restartProject,
   type RepoDetail,
   type Job,
+  type Container,
 } from "@/lib/api";
+import { ContainerList } from "@/components/ContainerList";
+import { LogViewer } from "@/components/LogViewer";
 import { formatRelativeTime } from "@/lib/utils";
 import {
   GitBranch,
@@ -20,13 +26,27 @@ import {
   ArrowLeft,
   Lock,
   Globe,
+  RotateCw,
+  Box,
 } from "lucide-react";
 
 export function RepoDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [repo, setRepo] = useState<RepoDetail | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [containers, setContainers] = useState<Container[]>([]);
+  const [selectedContainer, setSelectedContainer] = useState<Container | null>(null);
   const [loading, setLoading] = useState(true);
+  const [restartingProject, setRestartingProject] = useState(false);
+
+  const loadContainers = useCallback(async (projectName: string) => {
+    try {
+      const containerData = await fetchContainers(projectName);
+      setContainers(containerData);
+    } catch (e) {
+      console.error("Failed to load containers:", e);
+    }
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -38,6 +58,11 @@ export function RepoDetailPage() {
         ]);
         setRepo(repoData);
         setJobs(jobsData);
+
+        // Try to load containers for this project (using repo name as project name)
+        if (repoData.name) {
+          loadContainers(repoData.name);
+        }
       } catch (e) {
         console.error("Failed to load repo:", e);
       } finally {
@@ -45,7 +70,21 @@ export function RepoDetailPage() {
       }
     };
     load();
-  }, [id]);
+  }, [id, loadContainers]);
+
+  const handleRestartProject = async () => {
+    if (!repo) return;
+    setRestartingProject(true);
+    try {
+      await restartProject(repo.name);
+      // Refresh containers after restart
+      loadContainers(repo.name);
+    } catch (e) {
+      console.error("Failed to restart project:", e);
+    } finally {
+      setRestartingProject(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -173,6 +212,45 @@ export function RepoDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Containers section */}
+      {containers.length > 0 && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="flex items-center gap-2">
+              <Box className="h-5 w-5" />
+              Containers
+            </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRestartProject}
+              disabled={restartingProject}
+            >
+              {restartingProject ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <RotateCw className="h-4 w-4 mr-2" />
+              )}
+              Restart All
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {selectedContainer ? (
+              <LogViewer
+                container={selectedContainer}
+                onClose={() => setSelectedContainer(null)}
+              />
+            ) : (
+              <ContainerList
+                containers={containers}
+                onViewLogs={setSelectedContainer}
+                onRefresh={() => repo && loadContainers(repo.name)}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Repo info */}
       <Card>

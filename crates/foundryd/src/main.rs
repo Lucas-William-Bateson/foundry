@@ -2,6 +2,7 @@ mod auth;
 mod cloudflare;
 mod config;
 mod db;
+mod docker;
 mod routes;
 mod scheduler;
 

@@ -1,14 +1,18 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, sse::{Event, Sse}},
     routing::{delete, get, post},
     Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::convert::Infallible;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt as _;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoDetail, RepoSummary, ScheduleSummary};
+use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, ScheduleSummary};
+use crate::docker;
 use crate::AppState;
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -35,6 +39,17 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/schedules", get(api_schedules))
         .route("/api/schedule/{id}/toggle", post(api_toggle_schedule))
         .route("/api/schedule/{id}", delete(api_delete_schedule))
+        // Docker management routes
+        .route("/api/containers", get(api_list_containers))
+        .route("/api/containers/{id}/logs", get(api_container_logs))
+        .route("/api/containers/{id}/logs/stream", get(api_container_logs_stream))
+        .route("/api/containers/{id}/restart", post(api_restart_container))
+        .route("/api/containers/{id}/stop", post(api_stop_container))
+        .route("/api/containers/{id}/start", post(api_start_container))
+        .route("/api/projects", get(api_list_projects))
+        .route("/api/projects/{name}/restart", post(api_restart_project))
+        .route("/api/projects/{name}/stop", post(api_stop_project))
+        .route("/api/projects/{name}/start", post(api_start_project))
         // Serve static files, fall back to index.html for SPA routing
         .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
         .fallback_service(ServeFile::new(static_dir.join("index.html")))
@@ -179,6 +194,115 @@ async fn api_delete_schedule(
     match db::delete_schedule_by_id(&state.db, id).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "Schedule not found"}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+// Docker Container API Endpoints
+
+#[derive(Deserialize)]
+struct ContainersQuery {
+    project: Option<String>,
+}
+
+async fn api_list_containers(
+    Query(query): Query<ContainersQuery>,
+) -> impl IntoResponse {
+    match docker::list_containers(query.project.as_deref()).await {
+        Ok(containers) => (StatusCode::OK, Json(serde_json::json!(containers))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct LogsQuery {
+    lines: Option<u32>,
+}
+
+async fn api_container_logs(
+    Path(id): Path<String>,
+    Query(query): Query<LogsQuery>,
+) -> impl IntoResponse {
+    match docker::get_container_logs(&id, query.lines).await {
+        Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn api_container_logs_stream(
+    Path(id): Path<String>,
+    Query(query): Query<LogsQuery>,
+) -> impl IntoResponse {
+    match docker::stream_container_logs(&id, query.lines).await {
+        Ok(rx) => {
+            let stream = ReceiverStream::new(rx).map(|line| {
+                Ok::<_, Infallible>(Event::default().data(line))
+            });
+            Sse::new(stream).into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn api_restart_container(
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match docker::restart_container(&id).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+async fn api_stop_container(
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match docker::stop_container(&id).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+async fn api_start_container(
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    match docker::start_container(&id).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+// Docker Project API Endpoints
+
+async fn api_list_projects() -> impl IntoResponse {
+    match docker::list_projects().await {
+        Ok(projects) => (StatusCode::OK, Json(serde_json::json!(projects))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+    }
+}
+
+async fn api_restart_project(
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match docker::restart_project(&name).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+async fn api_stop_project(
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match docker::stop_project(&name).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+    }
+}
+
+async fn api_start_project(
+    Path(name): Path<String>,
+) -> impl IntoResponse {
+    match docker::start_project(&name).await {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
     }
 }

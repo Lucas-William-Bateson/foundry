@@ -166,3 +166,117 @@ export async function deleteSchedule(id: number): Promise<void> {
   });
   if (!res.ok) throw new Error("Failed to delete schedule");
 }
+
+// Docker Container Types and API
+
+export interface Container {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  created: string;
+  ports: string;
+  project?: string;
+}
+
+export interface ContainerLogs {
+  container_id: string;
+  logs: string[];
+}
+
+export async function fetchContainers(project?: string): Promise<Container[]> {
+  const url = project
+    ? `${API_BASE}/containers?project=${encodeURIComponent(project)}`
+    : `${API_BASE}/containers`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("Failed to fetch containers");
+  return res.json();
+}
+
+export async function fetchContainerLogs(
+  containerId: string,
+  lines = 100
+): Promise<ContainerLogs> {
+  const res = await fetch(
+    `${API_BASE}/containers/${containerId}/logs?lines=${lines}`
+  );
+  if (!res.ok) throw new Error("Failed to fetch container logs");
+  return res.json();
+}
+
+export function streamContainerLogs(
+  containerId: string,
+  onLog: (line: string) => void,
+  onError?: (error: Error) => void,
+  lines = 100
+): () => void {
+  const eventSource = new EventSource(
+    `${API_BASE}/containers/${containerId}/logs/stream?lines=${lines}`
+  );
+
+  eventSource.onmessage = (event) => {
+    onLog(event.data);
+  };
+
+  eventSource.onerror = () => {
+    if (onError) {
+      onError(new Error("Log stream connection failed"));
+    }
+    eventSource.close();
+  };
+
+  // Return cleanup function
+  return () => eventSource.close();
+}
+
+export async function restartContainer(containerId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/containers/${containerId}/restart`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to restart container");
+}
+
+export async function stopContainer(containerId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/containers/${containerId}/stop`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to stop container");
+}
+
+export async function startContainer(containerId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/containers/${containerId}/start`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error("Failed to start container");
+}
+
+export async function fetchProjects(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/projects`);
+  if (!res.ok) throw new Error("Failed to fetch projects");
+  return res.json();
+}
+
+export async function restartProject(projectName: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectName)}/restart`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error("Failed to restart project");
+}
+
+export async function stopProject(projectName: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectName)}/stop`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error("Failed to stop project");
+}
+
+export async function startProject(projectName: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectName)}/start`,
+    { method: "POST" }
+  );
+  if (!res.ok) throw new Error("Failed to start project");
+}
