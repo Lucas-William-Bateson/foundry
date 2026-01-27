@@ -25,8 +25,8 @@ export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/found
 cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
 cp /app/.env "$DEPLOY_DIR/.env" 2>/dev/null || true
 
-echo "Rebuilding containers..."
-docker compose -p "$PROJECT_NAME" build
+echo "Rebuilding containers (no cache)..."
+docker compose -p "$PROJECT_NAME" build --no-cache
 
 echo "Restarting services..."
 docker compose -p "$PROJECT_NAME" up -d --force-recreate --no-deps postgres foundryd cloudflared
