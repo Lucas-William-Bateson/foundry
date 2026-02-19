@@ -163,7 +163,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
         </button>
         
         <p className="mt-6 text-sm text-gray-500">
-          Authentication powered by Keycloak
+          Authentication powered by WorkOS
         </p>
       </div>
     </div>

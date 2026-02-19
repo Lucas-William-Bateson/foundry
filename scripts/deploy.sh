@@ -22,7 +22,15 @@ cd "$DEPLOY_DIR"
 
 export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/foundry/github-app.pem}"
 
-cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
+# Generate secrets.env from Proton Pass vault
+if command -v pass-cli &>/dev/null && [ -f "$DEPLOY_DIR/secrets.env.template" ]; then
+    echo "Generating secrets.env from Proton Pass vault..."
+    pass-cli inject "$DEPLOY_DIR/secrets.env.template" -o "$DEPLOY_DIR/secrets.env"
+else
+    echo "pass-cli not found or no template — copying existing secrets.env..."
+    cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
+fi
+
 cp /app/.env "$DEPLOY_DIR/.env" 2>/dev/null || true
 
 echo "Rebuilding containers (no cache)..."

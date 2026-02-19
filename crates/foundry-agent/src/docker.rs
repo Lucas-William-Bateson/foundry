@@ -473,6 +473,29 @@ async fn run_deploy(
 
         args.extend(["up", "-d", "--build", "--force-recreate"].iter().map(|s| s.to_string()));
 
+        // Inject secrets from Proton Pass if template exists
+        let template_path = repo_dir.join("secrets.env.template");
+        if template_path.exists() {
+            client.log(job, "Injecting secrets from Proton Pass...").await?;
+            let inject_output = Command::new("pass-cli")
+                .args([
+                    "inject",
+                    "--in-file", "secrets.env.template",
+                    "--out-file", "secrets.env",
+                    "--force",
+                ])
+                .current_dir(repo_dir)
+                .output()
+                .await
+                .context("Failed to run pass-cli inject (is pass-cli installed?)")?;
+
+            if !inject_output.status.success() {
+                let stderr = String::from_utf8_lossy(&inject_output.stderr);
+                anyhow::bail!("pass-cli inject failed: {}", stderr);
+            }
+            client.log(job, "Secrets injected successfully").await?;
+        }
+
         let output = Command::new("docker")
             .args(&args)
             .current_dir(repo_dir)

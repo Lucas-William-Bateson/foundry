@@ -11,7 +11,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
@@ -25,7 +25,6 @@ pub struct AuthState {
     pub config: AuthConfig,
     pub oidc_config: OidcConfig,
     pub jwks: Arc<RwLock<Jwks>>,
-    pub sessions: Arc<RwLock<HashMap<String, Session>>>,
     http_client: Client,
 }
 
@@ -50,14 +49,6 @@ pub struct JwkKey {
     pub alg: Option<String>,
     pub n: Option<String>,
     pub e: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub email: String,
-    pub name: Option<String>,
-    pub created_at: i64,
-    pub expires_at: i64,
 }
 
 #[allow(dead_code)]
@@ -139,35 +130,58 @@ impl AuthState {
             config,
             oidc_config,
             jwks: Arc::new(RwLock::new(Jwks { keys })),
-            sessions: Arc::new(RwLock::new(HashMap::new())),
             http_client,
         })
     }
 
-    pub async fn validate_session(&self, session_id: &str) -> Option<Session> {
-        let sessions = self.sessions.read().await;
-        if let Some(session) = sessions.get(session_id) {
-            let now = chrono::Utc::now().timestamp();
-            if session.expires_at > now {
-                // Check allowed emails if configured
-                if self.config.allowed_emails.is_empty() 
-                    || self.config.allowed_emails.contains(&session.email) 
-                {
-                    return Some(session.clone());
+    pub async fn validate_token(&self, token: &str) -> Option<IdTokenClaims> {
+        use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+
+        let jwks = self.jwks.read().await;
+
+        for key in &jwks.keys {
+            if let (Some(n), Some(e)) = (&key.n, &key.e) {
+                if let Ok(decoding_key) = DecodingKey::from_rsa_components(n, e) {
+                    let mut validation = Validation::new(Algorithm::RS256);
+                    validation.set_issuer(&[&self.oidc_config.issuer]);
+                    validation.validate_aud = false;
+
+                    if let Ok(token_data) = decode::<IdTokenClaims>(token, &decoding_key, &validation) {
+                        let claims = token_data.claims;
+                        // Check allowed emails if configured
+                        if let Some(ref email) = claims.email {
+                            if !self.config.allowed_emails.is_empty()
+                                && !self.config.allowed_emails.contains(email)
+                            {
+                                return None;
+                            }
+                        }
+                        return Some(claims);
+                    }
                 }
             }
         }
         None
     }
 
-    fn generate_session_id(&self) -> String {
-        let random_bytes: [u8; 32] = rand::thread_rng().gen();
-        URL_SAFE_NO_PAD.encode(random_bytes)
-    }
+    pub async fn refresh_jwks(&self) -> Result<()> {
+        let jwks_response: serde_json::Value = self
+            .http_client
+            .get(&self.oidc_config.jwks_uri)
+            .send()
+            .await?
+            .json()
+            .await?;
 
-    fn generate_state(&self) -> String {
-        let random_bytes: [u8; 16] = rand::thread_rng().gen();
-        URL_SAFE_NO_PAD.encode(random_bytes)
+        let keys: Vec<JwkKey> = serde_json::from_value(
+            jwks_response.get("keys").cloned().unwrap_or_default(),
+        )
+        .unwrap_or_default();
+
+        info!("Refreshed JWKS: {} keys", keys.len());
+        let mut jwks = self.jwks.write().await;
+        *jwks = Jwks { keys };
+        Ok(())
     }
 }
 
@@ -191,7 +205,10 @@ async fn login(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoR
         }
     };
 
-    let oauth_state = auth.generate_state();
+    let oauth_state: String = {
+        let b: [u8; 16] = rand::thread_rng().gen();
+        URL_SAFE_NO_PAD.encode(b)
+    };
     
     let auth_url = format!(
         "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile&state={}",
@@ -240,7 +257,7 @@ async fn callback(
         }
     };
 
-    // Get user info
+    // Get user info to verify the token and check allowed emails
     let user_info = match get_user_info(auth, &token_response.access_token).await {
         Ok(u) => u,
         Err(e) => {
@@ -259,27 +276,19 @@ async fn callback(
 
     info!("User logged in: {}", email);
 
-    // Create session
-    let session_id = auth.generate_session_id();
-    let session = Session {
-        email: email.clone(),
-        name: user_info.name.or(user_info.preferred_username),
-        created_at: chrono::Utc::now().timestamp(),
-        expires_at: chrono::Utc::now().timestamp() + 86400 * 7, // 7 days
-    };
+    // Determine cookie max_age from token expiry or default 7 days
+    let max_age = token_response
+        .expires_in
+        .map(|secs| time::Duration::seconds(secs as i64))
+        .unwrap_or_else(|| time::Duration::days(7));
 
-    {
-        let mut sessions = auth.sessions.write().await;
-        sessions.insert(session_id.clone(), session);
-    }
-
-    // Set session cookie
-    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, session_id))
+    // Store the access_token directly as the session cookie
+    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, token_response.access_token))
         .path("/")
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Lax)
-        .max_age(time::Duration::days(7))
+        .max_age(max_age)
         .build();
 
     // Clear state cookie
@@ -298,14 +307,7 @@ async fn callback(
         .into_response()
 }
 
-async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
-    if let Some(auth) = &state.auth {
-        if let Some(session_cookie) = jar.get(SESSION_COOKIE_NAME) {
-            let mut sessions = auth.sessions.write().await;
-            sessions.remove(session_cookie.value());
-        }
-    }
-
+async fn logout(State(_state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoResponse {
     let clear_session = Cookie::build((SESSION_COOKIE_NAME, ""))
         .path("/")
         .http_only(true)
@@ -330,22 +332,14 @@ async fn status(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
         }
     };
 
-    // Check for valid session
+    // Validate JWT from cookie
     if let Some(session_cookie) = jar.get(SESSION_COOKIE_NAME) {
-        let sessions = auth.sessions.read().await;
-        if let Some(session) = sessions.get(session_cookie.value()) {
-            let now = chrono::Utc::now().timestamp();
-            if session.expires_at > now {
-                if auth.config.allowed_emails.is_empty()
-                    || auth.config.allowed_emails.contains(&session.email)
-                {
-                    return Json(AuthStatus {
-                        authenticated: true,
-                        email: Some(session.email.clone()),
-                        name: session.name.clone(),
-                    });
-                }
-            }
+        if let Some(claims) = auth.validate_token(session_cookie.value()).await {
+            return Json(AuthStatus {
+                authenticated: true,
+                email: claims.email,
+                name: claims.name.or(claims.preferred_username),
+            });
         }
     }
 
@@ -409,9 +403,9 @@ pub async fn require_auth(
         None => return next.run(request).await,
     };
 
-    // Check for valid session
+    // Validate JWT from cookie
     if let Some(session_cookie) = jar.get(SESSION_COOKIE_NAME) {
-        if auth.validate_session(session_cookie.value()).await.is_some() {
+        if auth.validate_token(session_cookie.value()).await.is_some() {
             return next.run(request).await;
         }
     }
