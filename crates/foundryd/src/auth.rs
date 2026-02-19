@@ -79,6 +79,21 @@ pub struct UserInfo {
     pub preferred_username: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct WorkOsAuthResponse {
+    pub access_token: String,
+    pub refresh_token: Option<String>,
+    pub user: WorkOsUser,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkOsUser {
+    pub id: String,
+    pub email: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct AuthCallback {
     pub code: String,
@@ -98,18 +113,14 @@ impl AuthState {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        // Fetch OIDC discovery document
-        let discovery_url = format!("{}/.well-known/openid-configuration", config.issuer_url);
-        info!("Fetching OIDC config from {}", discovery_url);
-
-        let oidc_config: OidcConfig = http_client
-            .get(&discovery_url)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        info!("OIDC config loaded: issuer={}", oidc_config.issuer);
+        // WorkOS-specific endpoints (no OIDC discovery document)
+        let oidc_config = OidcConfig {
+            authorization_endpoint: "https://api.workos.com/user_management/authorize".to_string(),
+            token_endpoint: "https://api.workos.com/user_management/authenticate".to_string(),
+            userinfo_endpoint: String::new(), // not used — user info comes from authenticate response
+            jwks_uri: format!("https://api.workos.com/sso/jwks/{}", config.client_id),
+            issuer: "https://api.workos.com".to_string(),
+        };
 
         // Fetch JWKS
         let jwks_response: serde_json::Value = http_client
@@ -124,7 +135,7 @@ impl AuthState {
         )
         .unwrap_or_default();
 
-        info!("Loaded {} JWKS keys", keys.len());
+        info!("Loaded {} WorkOS JWKS keys", keys.len());
 
         Ok(Self {
             config,
@@ -211,7 +222,7 @@ async fn login(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoR
     };
     
     let auth_url = format!(
-        "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile&state={}",
+        "{}?client_id={}&redirect_uri={}&response_type=code&scope=openid%20email%20profile&state={}&provider=authkit",
         auth.oidc_config.authorization_endpoint,
         urlencoding::encode(&auth.config.client_id),
         urlencoding::encode(&auth.config.redirect_url),
@@ -248,25 +259,22 @@ async fn callback(
         return (StatusCode::BAD_REQUEST, "Invalid state").into_response();
     }
 
-    // Exchange code for token
-    let token_response = match exchange_code(auth, &params.code).await {
-        Ok(t) => t,
+    // Exchange code — WorkOS returns user info directly
+    let workos_response = match exchange_code(auth, &params.code).await {
+        Ok(r) => r,
         Err(e) => {
             error!("Failed to exchange code: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Token exchange failed").into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Authentication failed").into_response();
         }
     };
 
-    // Get user info to verify the token and check allowed emails
-    let user_info = match get_user_info(auth, &token_response.access_token).await {
-        Ok(u) => u,
-        Err(e) => {
-            error!("Failed to get user info: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to get user info").into_response();
-        }
-    };
-
-    let email = user_info.email.unwrap_or_else(|| user_info.sub.clone());
+    let email = workos_response.user.email.clone();
+    let first_name = workos_response.user.first_name;
+    let last_name = workos_response.user.last_name;
+    let _name = first_name
+        .map(|f| format!("{} {}", f, last_name.unwrap_or_default()))
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
 
     // Check if email is allowed
     if !auth.config.allowed_emails.is_empty() && !auth.config.allowed_emails.contains(&email) {
@@ -276,19 +284,13 @@ async fn callback(
 
     info!("User logged in: {}", email);
 
-    // Determine cookie max_age from token expiry or default 7 days
-    let max_age = token_response
-        .expires_in
-        .map(|secs| time::Duration::seconds(secs as i64))
-        .unwrap_or_else(|| time::Duration::days(7));
-
-    // Store the access_token directly as the session cookie
-    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, token_response.access_token))
+    // Store the access_token directly as the session cookie (default 7 days)
+    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, workos_response.access_token))
         .path("/")
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Lax)
-        .max_age(max_age)
+        .max_age(time::Duration::days(7))
         .build();
 
     // Clear state cookie
@@ -350,41 +352,24 @@ async fn status(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
     })
 }
 
-async fn exchange_code(auth: &AuthState, code: &str) -> Result<TokenResponse> {
-    let params = [
-        ("grant_type", "authorization_code"),
-        ("code", code),
-        ("redirect_uri", &auth.config.redirect_url),
-        ("client_id", &auth.config.client_id),
-        ("client_secret", &auth.config.client_secret),
-    ];
+async fn exchange_code(auth: &AuthState, code: &str) -> Result<WorkOsAuthResponse> {
+    let body = serde_json::json!({
+        "client_id": auth.config.client_id,
+        "client_secret": auth.config.client_secret,
+        "code": code,
+        "grant_type": "authorization_code"
+    });
 
     let response = auth
         .http_client
         .post(&auth.oidc_config.token_endpoint)
-        .form(&params)
+        .json(&body)
         .send()
         .await?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         return Err(anyhow!("Token exchange failed: {}", error_text));
-    }
-
-    Ok(response.json().await?)
-}
-
-async fn get_user_info(auth: &AuthState, access_token: &str) -> Result<UserInfo> {
-    let response = auth
-        .http_client
-        .get(&auth.oidc_config.userinfo_endpoint)
-        .bearer_auth(access_token)
-        .send()
-        .await?;
-
-    if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        return Err(anyhow!("User info request failed: {}", error_text));
     }
 
     Ok(response.json().await?)
