@@ -15,21 +15,21 @@ use crate::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, Schedu
 use crate::docker;
 use crate::AppState;
 
-pub fn router() -> Router<Arc<AppState>> {
-    // Look for frontend dist in multiple locations
-    let static_dir = if std::path::Path::new("frontend/dist").exists() {
+fn static_dir() -> std::path::PathBuf {
+    let dir = if std::path::Path::new("frontend/dist").exists() {
         std::path::Path::new("frontend/dist")
     } else if std::path::Path::new("/app/frontend/dist").exists() {
         std::path::Path::new("/app/frontend/dist")
     } else {
-        // Fallback - will fail gracefully
         std::path::Path::new("frontend/dist")
     };
+    tracing::info!("Serving frontend from: {:?}", dir);
+    dir.to_path_buf()
+}
 
-    tracing::info!("Serving frontend from: {:?}", static_dir);
-
+/// API routes — must be wrapped with require_auth in main.rs
+pub fn api_router() -> Router<Arc<AppState>> {
     Router::new()
-        // JSON API routes first (more specific)
         .route("/api/stats", get(api_stats))
         .route("/api/jobs", get(api_jobs))
         .route("/api/job/{id}", get(api_job))
@@ -39,7 +39,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/schedules", get(api_schedules))
         .route("/api/schedule/{id}/toggle", post(api_toggle_schedule))
         .route("/api/schedule/{id}", delete(api_delete_schedule))
-        // Docker management routes
         .route("/api/containers", get(api_list_containers))
         .route("/api/containers/{id}/logs", get(api_container_logs))
         .route("/api/containers/{id}/logs/stream", get(api_container_logs_stream))
@@ -50,9 +49,20 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/projects/{name}/restart", post(api_restart_project))
         .route("/api/projects/{name}/stop", post(api_stop_project))
         .route("/api/projects/{name}/start", post(api_start_project))
-        // Serve static files, fall back to index.html for SPA routing
-        .nest_service("/assets", ServeDir::new(static_dir.join("assets")))
-        .fallback_service(ServeFile::new(static_dir.join("index.html")))
+}
+
+/// Static file serving — always public so the login page (index.html) and its
+/// assets can load before the user has a session cookie.
+pub fn static_router() -> Router<Arc<AppState>> {
+    let dir = static_dir();
+    Router::new()
+        .nest_service("/assets", ServeDir::new(dir.join("assets")))
+        .fallback_service(ServeFile::new(dir.join("index.html")))
+}
+
+/// Combined router for use when auth is disabled.
+pub fn router() -> Router<Arc<AppState>> {
+    api_router().merge(static_router())
 }
 
 // API Endpoints
