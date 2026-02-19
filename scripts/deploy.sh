@@ -25,7 +25,7 @@ export GITHUB_APP_PRIVATE_KEY_FILE="${HOST_PRIVATE_KEY_PATH:-/root/.config/found
 # Generate secrets.env from Proton Pass vault
 if command -v pass-cli &>/dev/null && [ -f "$DEPLOY_DIR/secrets.env.template" ]; then
     echo "Generating secrets.env from Proton Pass vault..."
-    pass-cli inject "$DEPLOY_DIR/secrets.env.template" -o "$DEPLOY_DIR/secrets.env"
+    pass-cli inject -i "$DEPLOY_DIR/secrets.env.template" -o "$DEPLOY_DIR/secrets.env" --force
 else
     echo "pass-cli not found or no template — copying existing secrets.env..."
     cp /app/secrets.env "$DEPLOY_DIR/secrets.env"
