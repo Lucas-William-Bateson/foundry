@@ -518,9 +518,27 @@ async fn run_deploy(
             args.push(format!("{}:{}", port, port));
         }
 
-        // Add volume mounts
+        // Add volume mounts (validated)
         if let Some(volumes) = &fc.deploy.volumes {
             for vol in volumes {
+                // Validate volume spec: block host paths that could compromise the host
+                let host_part = vol.split(':').next().unwrap_or("");
+                let blocked = [
+                    "/var/run/docker.sock",
+                    "/etc",
+                    "/root",
+                    "/home",
+                    "/proc",
+                    "/sys",
+                    "/dev",
+                    "/boot",
+                    "/var/run",
+                ];
+                let is_blocked = blocked.iter().any(|b| host_part == *b || host_part.starts_with(&format!("{}/", b)));
+                if is_blocked {
+                    tracing::warn!("Blocked dangerous volume mount: {}", vol);
+                    return Err(anyhow::anyhow!("Volume mount not allowed: {}", host_part));
+                }
                 args.push("-v".to_string());
                 args.push(vol.clone());
             }

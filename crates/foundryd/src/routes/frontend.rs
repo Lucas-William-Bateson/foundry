@@ -146,7 +146,10 @@ async fn api_repo(
     match db::get_repo(&state.db, id).await {
         Ok(Some(repo)) => Json(serde_json::json!(repo)).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Repo not found"}))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        },
     }
 }
 
@@ -183,7 +186,10 @@ async fn api_toggle_schedule(
     match db::toggle_schedule(&state.db, id, req.enabled).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "Schedule not found"}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -194,7 +200,10 @@ async fn api_delete_schedule(
     match db::delete_schedule_by_id(&state.db, id).await {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Ok(false) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"ok": false, "error": "Schedule not found"}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -210,7 +219,10 @@ async fn api_list_containers(
 ) -> impl IntoResponse {
     match docker::list_containers(query.project.as_deref()).await {
         Ok(containers) => (StatusCode::OK, Json(serde_json::json!(containers))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        },
     }
 }
 
@@ -225,7 +237,10 @@ async fn api_container_logs(
 ) -> impl IntoResponse {
     match docker::get_container_logs(&id, query.lines).await {
         Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        },
     }
 }
 
@@ -240,7 +255,10 @@ async fn api_container_logs_stream(
             });
             Sse::new(stream).into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        },
     }
 }
 
@@ -249,7 +267,10 @@ async fn api_restart_container(
 ) -> impl IntoResponse {
     match docker::restart_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -258,7 +279,10 @@ async fn api_stop_container(
 ) -> impl IntoResponse {
     match docker::stop_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -267,7 +291,10 @@ async fn api_start_container(
 ) -> impl IntoResponse {
     match docker::start_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -276,7 +303,10 @@ async fn api_start_container(
 async fn api_list_projects() -> impl IntoResponse {
     match docker::list_projects().await {
         Ok(projects) => (StatusCode::OK, Json(serde_json::json!(projects))).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))).into_response(),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        },
     }
 }
 
@@ -285,7 +315,10 @@ async fn api_restart_project(
 ) -> impl IntoResponse {
     match docker::restart_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -294,7 +327,10 @@ async fn api_stop_project(
 ) -> impl IntoResponse {
     match docker::stop_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }
 
@@ -303,6 +339,9 @@ async fn api_start_project(
 ) -> impl IntoResponse {
     match docker::start_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": e.to_string()}))),
+        Err(e) => {
+            tracing::error!("{}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"ok": false, "error": "Internal server error"})))
+        },
     }
 }

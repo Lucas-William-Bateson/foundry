@@ -205,7 +205,7 @@ async fn login(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl IntoR
         .path("/")
         .http_only(true)
         .secure(true)
-        .same_site(SameSite::None)
+        .same_site(SameSite::Lax)
         .max_age(time::Duration::minutes(10))
         .build();
 
@@ -285,6 +285,9 @@ async fn callback(
     // Clear state cookie
     let clear_state = Cookie::build((STATE_COOKIE_NAME, ""))
         .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
         .max_age(time::Duration::ZERO)
         .build();
 
@@ -305,6 +308,9 @@ async fn logout(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
 
     let clear_session = Cookie::build((SESSION_COOKIE_NAME, ""))
         .path("/")
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
         .max_age(time::Duration::ZERO)
         .build();
 
@@ -391,7 +397,6 @@ async fn get_user_info(auth: &AuthState, access_token: &str) -> Result<UserInfo>
 }
 
 // Middleware to check authentication
-#[allow(dead_code)]
 pub async fn require_auth(
     State(state): State<Arc<AppState>>,
     jar: CookieJar,

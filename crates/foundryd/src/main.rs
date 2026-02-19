@@ -20,6 +20,16 @@ use crate::auth::AuthState;
 use crate::cloudflare::{CloudflareConfig, CloudflareTunnel};
 use crate::config::Config;
 
+async fn security_headers(request: axum::http::Request<axum::body::Body>, next: axum::middleware::Next) -> impl axum::response::IntoResponse {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Frame-Options", axum::http::HeaderValue::from_static("DENY"));
+    headers.insert("X-Content-Type-Options", axum::http::HeaderValue::from_static("nosniff"));
+    headers.insert("Referrer-Policy", axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"));
+    headers.insert("Permissions-Policy", axum::http::HeaderValue::from_static("geolocation=(), microphone=(), camera=()"));
+    response
+}
+
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub config: Config,
@@ -104,17 +114,24 @@ async fn main() -> Result<()> {
 
     // Build the router with optional auth protection
     let mut app = Router::new()
-        .merge(routes::frontend::router())
         .merge(routes::webhook::router())
-        .merge(routes::agent::router())
         .merge(routes::health::router());
-    
+
     // Add auth routes if auth is enabled
     if state.auth.is_some() {
-        app = app.merge(auth::router());
+        let protected = Router::new()
+            .merge(routes::frontend::router())
+            .merge(routes::agent::router())
+            .route_layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_auth));
+        app = app.merge(protected).merge(auth::router());
+    } else {
+        app = app
+            .merge(routes::frontend::router())
+            .merge(routes::agent::router());
     }
-    
+
     let app = app
+        .layer(axum::middleware::from_fn(security_headers))
         .layer(TraceLayer::new_for_http())
         .with_state(state.clone());
 
