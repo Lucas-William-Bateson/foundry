@@ -12,7 +12,6 @@ use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
-use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::{config::AuthConfig, AppState};
@@ -24,59 +23,20 @@ const STATE_COOKIE_NAME: &str = "foundry_oauth_state";
 pub struct AuthState {
     pub config: AuthConfig,
     pub oidc_config: OidcConfig,
-    pub jwks: Arc<RwLock<Jwks>>,
     http_client: Client,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct OidcConfig {
     pub authorization_endpoint: String,
     pub token_endpoint: String,
-    pub userinfo_endpoint: String,
-    pub jwks_uri: String,
-    pub issuer: String,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Jwks {
-    pub keys: Vec<JwkKey>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct JwkKey {
-    pub kid: String,
-    pub kty: String,
-    pub alg: Option<String>,
-    pub n: Option<String>,
-    pub e: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct TokenResponse {
-    pub access_token: String,
-    pub id_token: Option<String>,
-    pub token_type: String,
-    pub expires_in: Option<u64>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-pub struct IdTokenClaims {
-    pub sub: String,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub preferred_username: Option<String>,
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionClaims {
+    pub email: String,
     pub exp: i64,
     pub iat: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UserInfo {
-    pub sub: String,
-    pub email: Option<String>,
-    pub name: Option<String>,
-    pub preferred_username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,86 +73,60 @@ impl AuthState {
             .timeout(Duration::from_secs(10))
             .build()?;
 
-        // WorkOS-specific endpoints (no OIDC discovery document)
         let oidc_config = OidcConfig {
             authorization_endpoint: "https://api.workos.com/user_management/authorize".to_string(),
             token_endpoint: "https://api.workos.com/user_management/authenticate".to_string(),
-            userinfo_endpoint: String::new(), // not used — user info comes from authenticate response
-            jwks_uri: format!("https://api.workos.com/sso/jwks/{}", config.client_id),
-            issuer: "https://api.workos.com".to_string(),
         };
 
-        // Fetch JWKS
-        let jwks_response: serde_json::Value = http_client
-            .get(&oidc_config.jwks_uri)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        let keys: Vec<JwkKey> = serde_json::from_value(
-            jwks_response.get("keys").cloned().unwrap_or_default(),
-        )
-        .unwrap_or_default();
-
-        info!("Loaded {} WorkOS JWKS keys", keys.len());
+        info!("WorkOS auth initialised (client_id={})", config.client_id);
 
         Ok(Self {
             config,
             oidc_config,
-            jwks: Arc::new(RwLock::new(Jwks { keys })),
             http_client,
         })
     }
 
-    pub async fn validate_token(&self, token: &str) -> Option<IdTokenClaims> {
+    /// Validate a session token (our own HS256 JWT, not WorkOS's token).
+    pub fn validate_session(&self, token: &str) -> Option<SessionClaims> {
         use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
-        let jwks = self.jwks.read().await;
+        let key = DecodingKey::from_secret(self.config.cookie_secret.as_bytes());
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_aud = false;
 
-        for key in &jwks.keys {
-            if let (Some(n), Some(e)) = (&key.n, &key.e) {
-                if let Ok(decoding_key) = DecodingKey::from_rsa_components(n, e) {
-                    let mut validation = Validation::new(Algorithm::RS256);
-                    validation.set_issuer(&[&self.oidc_config.issuer]);
-                    validation.validate_aud = false;
-
-                    if let Ok(token_data) = decode::<IdTokenClaims>(token, &decoding_key, &validation) {
-                        let claims = token_data.claims;
-                        // Check allowed emails if configured
-                        if let Some(ref email) = claims.email {
-                            if !self.config.allowed_emails.is_empty()
-                                && !self.config.allowed_emails.contains(email)
-                            {
-                                return None;
-                            }
-                        }
-                        return Some(claims);
-                    }
+        match decode::<SessionClaims>(token, &key, &validation) {
+            Ok(data) => {
+                let claims = data.claims;
+                if !self.config.allowed_emails.is_empty()
+                    && !self.config.allowed_emails.contains(&claims.email)
+                {
+                    warn!("Session email not in allowed list: {}", claims.email);
+                    return None;
                 }
+                Some(claims)
+            }
+            Err(e) => {
+                warn!("Session token invalid: {}", e);
+                None
             }
         }
-        None
     }
 
-    pub async fn refresh_jwks(&self) -> Result<()> {
-        let jwks_response: serde_json::Value = self
-            .http_client
-            .get(&self.oidc_config.jwks_uri)
-            .send()
-            .await?
-            .json()
-            .await?;
+    /// Create a signed session token for the given email (7-day expiry).
+    pub fn create_session(&self, email: &str) -> Result<String> {
+        use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+        use std::time::{SystemTime, UNIX_EPOCH};
 
-        let keys: Vec<JwkKey> = serde_json::from_value(
-            jwks_response.get("keys").cloned().unwrap_or_default(),
-        )
-        .unwrap_or_default();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let claims = SessionClaims {
+            email: email.to_string(),
+            iat: now,
+            exp: now + 7 * 24 * 3600,
+        };
 
-        info!("Refreshed JWKS: {} keys", keys.len());
-        let mut jwks = self.jwks.write().await;
-        *jwks = Jwks { keys };
-        Ok(())
+        let key = EncodingKey::from_secret(self.config.cookie_secret.as_bytes());
+        Ok(encode(&Header::new(Algorithm::HS256), &claims, &key)?)
     }
 }
 
@@ -284,8 +218,16 @@ async fn callback(
 
     info!("User logged in: {}", email);
 
-    // Store the access_token directly as the session cookie (default 7 days)
-    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, workos_response.access_token))
+    // Create our own HS256 session token — avoids WorkOS JWT validation complexity
+    let session_token = match auth.create_session(&email) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("Failed to create session token: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Authentication failed").into_response();
+        }
+    };
+
+    let session_cookie = Cookie::build((SESSION_COOKIE_NAME, session_token))
         .path("/")
         .http_only(true)
         .secure(true)
@@ -334,13 +276,13 @@ async fn status(State(state): State<Arc<AppState>>, jar: CookieJar) -> impl Into
         }
     };
 
-    // Validate JWT from cookie
+    // Validate session cookie
     if let Some(session_cookie) = jar.get(SESSION_COOKIE_NAME) {
-        if let Some(claims) = auth.validate_token(session_cookie.value()).await {
+        if let Some(claims) = auth.validate_session(session_cookie.value()) {
             return Json(AuthStatus {
                 authenticated: true,
-                email: claims.email,
-                name: claims.name.or(claims.preferred_username),
+                email: Some(claims.email),
+                name: None,
             });
         }
     }
@@ -388,9 +330,9 @@ pub async fn require_auth(
         None => return next.run(request).await,
     };
 
-    // Validate JWT from cookie
+    // Validate session cookie
     if let Some(session_cookie) = jar.get(SESSION_COOKIE_NAME) {
-        if auth.validate_token(session_cookie.value()).await.is_some() {
+        if auth.validate_session(session_cookie.value()).is_some() {
             return next.run(request).await;
         }
     }

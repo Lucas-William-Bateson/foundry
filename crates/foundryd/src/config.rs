@@ -50,6 +50,7 @@ pub struct AuthConfig {
     pub issuer_url: String,
     pub client_id: String,
     pub client_secret: String,
+    pub cookie_secret: String,
     pub redirect_url: String,
     pub allowed_emails: Vec<String>,
 }
@@ -60,6 +61,7 @@ impl fmt::Debug for AuthConfig {
             .field("issuer_url", &self.issuer_url)
             .field("client_id", &self.client_id)
             .field("client_secret", &"[REDACTED]")
+            .field("cookie_secret", &"[REDACTED]")
             .field("redirect_url", &self.redirect_url)
             .field("allowed_emails", &self.allowed_emails)
             .finish()
@@ -108,6 +110,8 @@ impl Config {
                     .context("FOUNDRY_AUTH_CLIENT_ID required when auth enabled")?,
                 client_secret: std::env::var("FOUNDRY_AUTH_CLIENT_SECRET")
                     .context("FOUNDRY_AUTH_CLIENT_SECRET required when auth enabled")?,
+                cookie_secret: std::env::var("FOUNDRY_AUTH_COOKIE_SECRET")
+                    .context("FOUNDRY_AUTH_COOKIE_SECRET required when auth enabled")?,
                 redirect_url: std::env::var("FOUNDRY_AUTH_REDIRECT_URL")
                     .context("FOUNDRY_AUTH_REDIRECT_URL required when auth enabled")?,
                 allowed_emails: std::env::var("FOUNDRY_AUTH_ALLOWED_EMAILS")
