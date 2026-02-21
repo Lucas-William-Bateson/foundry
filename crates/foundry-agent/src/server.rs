@@ -31,16 +31,27 @@ impl ServerClient {
             agent_id: self.agent_id.clone(),
         };
 
-        let resp: ClaimResponse = self
+        let response = self
             .client
             .post(&url)
             .json(&req)
             .send()
             .await
-            .context("Failed to connect to server")?
-            .json()
+            .context("Failed to connect to server")?;
+
+        let status = response.status();
+        let body = response
+            .text()
             .await
-            .context("Failed to parse claim response")?;
+            .context("Failed to read claim response body")?;
+
+        let resp: ClaimResponse = serde_json::from_str(&body).with_context(|| {
+            format!(
+                "Failed to parse claim response (HTTP {}): {}",
+                status,
+                &body[..body.len().min(500)]
+            )
+        })?;
 
         match resp {
             ClaimResponse::Claimed { job } => Ok(Some(job)),
