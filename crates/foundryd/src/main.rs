@@ -121,9 +121,9 @@ async fn main() -> Result<()> {
     if state.auth.is_some() {
         let protected = Router::new()
             .merge(routes::frontend::api_router())
-            .merge(routes::agent::router())
             .route_layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_auth));
         app = app
+            .merge(routes::agent::router())
             .merge(protected)
             .merge(routes::frontend::static_router()) // public: login page must load before session exists
             .merge(auth::router());
