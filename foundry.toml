@@ -1,0 +1,7 @@
+[build]
+dockerfile = "Dockerfile"
+
+[deploy]
+name = "foundry"
+domain = "foundry.l3s.me"
+compose_file = "docker-compose.yml"

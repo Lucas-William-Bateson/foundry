@@ -1,0 +1,191 @@
+//! Deployment logic — container deployment, compose-based deploys, domain routing,
+//! and Cloudflare integration.
+
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use tokio::process::Command;
+
+use foundry_core::{ClaimedJob, FoundryConfig};
+use foundry_core::cloudflare::CloudflareClient;
+
+use crate::types::config::Config;
+use crate::infrastructure::docker::build_image;
+use crate::api::server::ServerClient;
+
+pub(crate) async fn run_deploy(
+    client: &ServerClient,
+    job: &ClaimedJob,
+    repo_dir: &PathBuf,
+    _config: &Config,
+    untrusted_repo_config: &FoundryConfig,
+) -> Result<()> {
+    let app_name = untrusted_repo_config.deploy.name.as_deref().unwrap_or(&job.repo_name);
+
+    client.log(job, &format!("🚀 Deploying {}", app_name)).await?;
+
+    if let Some(compose_file) = &untrusted_repo_config.deploy.compose_file {
+        client.log(job, &format!("Using compose file: {}", compose_file)).await?;
+
+        let compose_path = repo_dir.join(compose_file);
+
+        let mut args = vec![
+            "compose".to_string(),
+            "-f".to_string(),
+            compose_path.to_string_lossy().to_string(),
+            "-p".to_string(),
+            app_name.to_string(),
+        ];
+
+        // Add env file if specified (absolute path on host)
+        if let Some(env_file) = &untrusted_repo_config.deploy.env_file {
+            client.log(job, &format!("Using env file: {}", env_file)).await?;
+            args.push("--env-file".to_string());
+            args.push(env_file.clone());
+        }
+
+        args.extend(["up", "-d", "--build", "--force-recreate"].iter().map(|s| s.to_string()));
+
+        let output = Command::new("docker")
+            .args(&args)
+            .current_dir(repo_dir)
+            .output()
+            .await
+            .context("Failed to run docker compose")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            client.log(job, &format!("Deploy failed: {}", stderr)).await?;
+            anyhow::bail!("Docker compose failed");
+        }
+    } else {
+        let image_tag = if untrusted_repo_config.build.dockerfile.is_some() {
+            build_image(client, job, repo_dir, untrusted_repo_config).await?
+        } else {
+            untrusted_repo_config.build.image.clone()
+        };
+
+        let container_name = format!("foundry-{}", app_name);
+
+        client.log(job, &format!("Stopping existing container: {}", container_name)).await?;
+        let _ = Command::new("docker")
+            .args(["stop", &container_name])
+            .output()
+            .await;
+        let _ = Command::new("docker")
+            .args(["rm", &container_name])
+            .output()
+            .await;
+
+        let mut args = vec![
+            "run".to_string(),
+            "-d".to_string(),
+            "--name".to_string(),
+            container_name.clone(),
+            "--restart".to_string(),
+            "unless-stopped".to_string(),
+        ];
+
+        if let Some(port) = untrusted_repo_config.deploy.port {
+            args.push("-p".to_string());
+            args.push(format!("{}:{}", port, port));
+        }
+
+        // Add volume mounts (validated)
+        if let Some(volumes) = &untrusted_repo_config.deploy.volumes {
+            for vol in volumes {
+                // Validate volume spec: block host paths that could compromise the host
+                let host_part = vol.split(':').next().unwrap_or("");
+                let blocked = [
+                    "/var/run/docker.sock",
+                    "/etc",
+                    "/root",
+                    "/home",
+                    "/proc",
+                    "/sys",
+                    "/dev",
+                    "/boot",
+                    "/var/run",
+                ];
+                let is_blocked = blocked.iter().any(|b| host_part == *b || host_part.starts_with(&format!("{}/", b)));
+                if is_blocked {
+                    tracing::warn!("Blocked dangerous volume mount: {}", vol);
+                    return Err(anyhow::anyhow!("Volume mount not allowed: {}", host_part));
+                }
+                args.push("-v".to_string());
+                args.push(vol.clone());
+            }
+        }
+
+        for (key, value) in &untrusted_repo_config.env {
+            args.push("-e".to_string());
+            args.push(format!("{}={}", key, value));
+        }
+
+        args.push(image_tag);
+
+        if let Some(cmd) = &untrusted_repo_config.build.command {
+            args.extend(cmd.split_whitespace().map(String::from));
+        }
+
+        client.log(job, &format!("Starting container: {}", container_name)).await?;
+
+        let output = Command::new("docker")
+            .args(&args)
+            .current_dir(repo_dir)
+            .output()
+            .await
+            .context("Failed to start container")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            client.log(job, &format!("Failed to start: {}", stderr)).await?;
+            anyhow::bail!("Failed to start container");
+        }
+    }
+
+    let domains = untrusted_repo_config.deploy.all_domains();
+    if !domains.is_empty() {
+        let port = untrusted_repo_config.deploy.port.unwrap_or(8080);
+        client.log(job, &format!("🌐 Configuring {} domain route(s) -> port {}", domains.len(), port)).await?;
+        
+        for domain in domains {
+            match setup_domain_route(domain, port).await {
+                Ok(()) => {
+                    client.log(job, &format!("✅ Domain configured: https://{}", domain)).await?;
+                }
+                Err(e) => {
+                    client.log(job, &format!("⚠️ Failed to setup domain route for {}: {}", domain, e)).await?;
+                    tracing::error!("Failed to setup domain route for {}: {}", domain, e);
+                }
+            }
+        }
+    }
+
+    client.log(job, &format!("✅ {} deployed successfully", app_name)).await?;
+    Ok(())
+}
+
+async fn setup_domain_route(domain: &str, port: u16) -> anyhow::Result<()> {
+    if let Some(cf_client) = CloudflareClient::from_env()? {
+        if let Some(existing_service) = cf_client.get_route(domain).await? {
+            let new_service = format!("http://127.0.0.1:{}", port);
+            if existing_service != new_service {
+                tracing::info!(
+                    "Domain {} is currently routed to {}, updating to {}",
+                    domain, existing_service, new_service
+                );
+            }
+        }
+
+        let service = format!("http://127.0.0.1:{}", port);
+        cf_client.add_route(domain, &service).await?;
+        tracing::info!("Domain route configured: {} -> {}", domain, service);
+    } else {
+        tracing::warn!(
+            "Cloudflare credentials not configured, skipping domain setup for {}",
+            domain
+        );
+    }
+    Ok(())
+}
