@@ -27,7 +27,7 @@ export VAULT_ADDR
 
 # ---- helpers ----------------------------------------------------------------
 vault_cmd() {
-  docker compose exec -T vault vault "$@"
+  docker compose exec -T -e VAULT_TOKEN="${VAULT_TOKEN:-}" vault vault "$@"
 }
 
 wait_for_vault() {
