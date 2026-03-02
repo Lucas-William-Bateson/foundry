@@ -33,8 +33,7 @@ vault_cmd() {
 wait_for_vault() {
   echo "Waiting for Vault to be reachable..."
   local attempts=0
-  until vault_cmd status -format=json 2>/dev/null | grep -q '"initialized"' 2>/dev/null \
-    || curl -sf "${VAULT_ADDR}/v1/sys/health" >/dev/null 2>&1; do
+  until curl -s -o /dev/null -w "%{http_code}" "${VAULT_ADDR}/v1/sys/health" 2>/dev/null | grep -qE '^(200|429|501|503)$'; do
     attempts=$((attempts + 1))
     if [ "$attempts" -ge 30 ]; then
       echo "ERROR: Vault not reachable after 30 attempts"
