@@ -16,10 +16,10 @@ use crate::infrastructure::docker;
 use crate::AppState;
 
 fn static_dir() -> std::path::PathBuf {
-    let dir = if std::path::Path::new("frontend/dist").exists() {
-        std::path::Path::new("frontend/dist")
-    } else if std::path::Path::new("/app/frontend/dist").exists() {
+    let dir = if std::path::Path::new("/app/frontend/dist").exists() {
         std::path::Path::new("/app/frontend/dist")
+    } else if std::path::Path::new("frontend/dist").exists() {
+        std::path::Path::new("frontend/dist")
     } else {
         std::path::Path::new("frontend/dist")
     };
