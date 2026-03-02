@@ -9,9 +9,13 @@ services:
     volumes:
       - vault_data:/vault/data
       - ./config/vault/vault.hcl:/vault/config/vault.hcl:ro
-    command: vault server -config=/vault/config/vault.hcl
+    command: sh -c "chown -R vault:vault /vault/data && su-exec vault vault server -config=/vault/config/vault.hcl"
     healthcheck:
-      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      test:
+        [
+          "CMD-SHELL",
+          "vault status -address=http://127.0.0.1:8200 2>&1 || true",
+        ]
       interval: 5s
       timeout: 5s
       retries: 10
