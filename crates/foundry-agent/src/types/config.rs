@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -13,6 +14,13 @@ pub struct Config {
     pub github_private_key: Option<String>,
     pub self_repo: Option<String>,
     pub self_deploy_script: Option<String>,
+    /// Vault AppRole role_id (non-secret, stored in CI config)
+    pub vault_role_id: Option<String>,
+    /// Vault bootstrap token for generating per-job secret_ids.
+    /// Wrapped in SecretString to prevent accidental logging.
+    pub vault_bootstrap_token: Option<SecretString>,
+    /// Vault address (e.g. http://vault:8200)
+    pub vault_addr: Option<String>,
 }
 
 impl Config {
@@ -48,6 +56,9 @@ impl Config {
             github_private_key,
             self_repo: std::env::var("FOUNDRY_SELF_REPO").ok(),
             self_deploy_script: std::env::var("FOUNDRY_SELF_DEPLOY_SCRIPT").ok(),
+            vault_addr: std::env::var("VAULT_ADDR").ok(),
+            vault_role_id: std::env::var("VAULT_ROLE_ID").ok(),
+            vault_bootstrap_token: Self::load_vault_bootstrap_token(),
         })
     }
 
@@ -55,5 +66,31 @@ impl Config {
         self.github_app_id.is_some()
             && self.github_installation_id.is_some()
             && self.github_private_key.is_some()
+    }
+
+    pub fn has_vault(&self) -> bool {
+        self.vault_addr.is_some() && self.vault_role_id.is_some()
+    }
+
+    /// Load the Vault bootstrap token from env var or file.
+    /// The bootstrap token is used to generate per-job secret_ids.
+    /// Immediately wrapped in SecretString; the raw env var is removed.
+    fn load_vault_bootstrap_token() -> Option<SecretString> {
+        // Try env var first
+        if let Ok(token) = std::env::var("VAULT_BOOTSTRAP_TOKEN") {
+            // Remove from process env — only our SecretString copy should exist
+            std::env::remove_var("VAULT_BOOTSTRAP_TOKEN");
+            return Some(SecretString::from(token));
+        }
+        // Try file (600 perms on host)
+        if let Ok(path) = std::env::var("VAULT_BOOTSTRAP_TOKEN_FILE") {
+            if let Ok(token) = std::fs::read_to_string(&path) {
+                let token = token.trim().to_string();
+                if !token.is_empty() {
+                    return Some(SecretString::from(token));
+                }
+            }
+        }
+        None
     }
 }

@@ -99,6 +99,63 @@ NODE_ENV = "production"
 
 The `[schedule]` section allows you to run builds on a cron schedule. The schedule is synced from your `foundry.toml` to the server on each build, so you can update it by pushing changes. Schedules can be viewed, toggled, and deleted from the dashboard.
 
+## Vault Secrets Management
+
+Foundry includes a built-in HashiCorp Vault integration for injecting secrets into CI jobs. Secrets are fetched at runtime via AppRole authentication — no secrets touch disk or source control.
+
+### How it works
+
+1. Vault runs as a Docker service alongside foundry
+2. Secrets are stored in Vault's KV v2 engine (e.g. `secret/myapp/prod`)
+3. Projects declare their Vault path in `foundry.toml`
+4. Before each job, the agent generates a **single-use** `secret_id`, authenticates via AppRole, fetches secrets, and injects them as environment variables
+
+### Setup
+
+```bash
+# 1. Start all services (including Vault)
+docker compose up -d
+
+# 2. Initialise Vault (first time only)
+./scripts/vault-init.sh
+
+# 3. Store secrets
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=$(jq -r '.root_token' config/vault/init.json)
+vault kv put secret/myapp/prod DB_URL="postgres://..." API_KEY="abc123"
+
+# 4. Add role_id and bootstrap token to secrets.env
+# (vault-init.sh outputs these — see config/vault/approle.env)
+```
+
+After a restart, Vault will be sealed. Unseal with:
+
+```bash
+./scripts/vault-unseal.sh
+```
+
+### Per-project configuration
+
+Add a `[secrets]` section to your repo's `foundry.toml`:
+
+```toml
+[secrets]
+vault_path = "myapp/prod"         # KV v2 path (reads secret/data/myapp/prod)
+# keys = ["DB_URL", "API_KEY"]    # Optional: only inject specific keys
+```
+
+All key-value pairs at that path are injected as environment variables before stages, deploy, or container execution.
+
+### Security model
+
+| Component         | Where it lives                 | Sensitivity |
+| ----------------- | ------------------------------ | ----------- |
+| `role_id`         | `secrets.env` / CI config      | Non-secret  |
+| `bootstrap_token` | File with `600` perms on host  | Secret      |
+| `secret_id`       | Generated per job, single-use  | Ephemeral   |
+| Client token      | In-memory only, 15 min TTL     | Ephemeral   |
+| Unseal key        | `config/vault/init.json` (600) | Critical    |
+
 **Timeouts:**
 
 Builds automatically timeout after `build.timeout` seconds (default: 1800 = 30 minutes). Timed out builds are marked as failed.
@@ -153,13 +210,17 @@ cargo run -p foundry-agent
 
 ### Agent (foundry-agent)
 
-| Variable                  | Description                  | Default                 |
-| ------------------------- | ---------------------------- | ----------------------- |
-| `FOUNDRY_SERVER_URL`      | URL of foundryd server       | `http://localhost:8080` |
-| `FOUNDRY_AGENT_ID`        | Unique agent identifier      | Auto-generated          |
-| `FOUNDRY_WORKSPACE_DIR`   | Directory for job workspaces | `/tmp/foundry`          |
-| `FOUNDRY_POLL_INTERVAL`   | Seconds between job polls    | `5`                     |
-| `FOUNDRY_DEFAULT_COMMAND` | Command to run in containers | `echo 'No command'`     |
+| Variable                     | Description                     | Default                 |
+| ---------------------------- | ------------------------------- | ----------------------- |
+| `FOUNDRY_SERVER_URL`         | URL of foundryd server          | `http://localhost:8080` |
+| `FOUNDRY_AGENT_ID`           | Unique agent identifier         | Auto-generated          |
+| `FOUNDRY_WORKSPACE_DIR`      | Directory for job workspaces    | `/tmp/foundry`          |
+| `FOUNDRY_POLL_INTERVAL`      | Seconds between job polls       | `5`                     |
+| `FOUNDRY_DEFAULT_COMMAND`    | Command to run in containers    | `echo 'No command'`     |
+| `VAULT_ADDR`                 | Vault server address            | (optional)              |
+| `VAULT_ROLE_ID`              | AppRole role ID (non-secret)    | (optional)              |
+| `VAULT_BOOTSTRAP_TOKEN`      | Token for generating secret_ids | (optional)              |
+| `VAULT_BOOTSTRAP_TOKEN_FILE` | File containing bootstrap token | (optional)              |
 
 ## Exposing to the Internet
 

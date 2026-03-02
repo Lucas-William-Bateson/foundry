@@ -16,6 +16,8 @@ pub struct FoundryConfig {
     pub stages: Vec<StageConfig>,
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub secrets: Option<SecretsConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -171,6 +173,33 @@ pub struct DeployConfig {
     pub volumes: Option<Vec<String>>,
     #[serde(default)]
     pub env_file: Option<String>,
+}
+
+/// Vault secrets configuration — declared per-project in foundry.toml.
+///
+/// Example:
+/// ```toml
+/// [secrets]
+/// vault_path = "myapp/prod"
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SecretsConfig {
+    /// KV v2 path relative to the `secret/` mount, e.g. `"myapp/prod"`.
+    /// The agent will read `secret/data/{vault_path}` and inject the values
+    /// as environment variables into the job.
+    #[serde(default)]
+    pub vault_path: Option<String>,
+
+    /// Optional list of specific keys to pull from Vault. If empty, all keys
+    /// at the path are injected.
+    #[serde(default)]
+    pub keys: Option<Vec<String>>,
+}
+
+impl SecretsConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.vault_path.is_some()
+    }
 }
 
 impl DeployConfig {
@@ -369,6 +398,7 @@ mod tests {
             schedule: None,
             stages: vec![valid_stage("test"), valid_stage("build")],
             env: std::collections::HashMap::new(),
+            secrets: None,
         };
         assert!(config.validate().is_ok());
     }

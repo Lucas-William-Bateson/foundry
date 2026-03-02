@@ -6,6 +6,10 @@ secrets.env
 *.pem
 *.key
 
+# Vault runtime data (unseal keys, tokens)
+config/vault/init.json
+config/vault/approle.env
+
 # Logs
 *.log
 

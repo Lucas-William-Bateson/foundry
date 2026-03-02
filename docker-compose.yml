@@ -1,4 +1,25 @@
 services:
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_ADDR: "http://127.0.0.1:8200"
+      VAULT_API_ADDR: "http://127.0.0.1:8200"
+    volumes:
+      - vault_data:/vault/data
+      - ./config/vault/vault.hcl:/vault/config/vault.hcl:ro
+    command: vault server -config=/vault/config/vault.hcl
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    ports:
+      - "127.0.0.1:8200:8200"
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
@@ -21,6 +42,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
       interval: 5s
@@ -30,6 +53,7 @@ services:
       DATABASE_URL: postgres://foundry:foundry@postgres:5432/foundry
       FOUNDRY_BIND_ADDR: 0.0.0.0:8081
       FOUNDRY_ENABLE_TUNNEL: "false"
+      VAULT_ADDR: http://vault:8200
       CF_TUNNEL_NAME: mini_server
       CF_TUNNEL_DOMAIN: foundry.l3s.me
       # Auth env vars are loaded from secrets.env:
@@ -57,6 +81,8 @@ services:
     depends_on:
       foundryd:
         condition: service_healthy
+      vault:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "pgrep", "-f", "foundry-agent"]
       interval: 10s
@@ -66,6 +92,7 @@ services:
       FOUNDRY_SERVER_URL: http://foundryd:8081
       FOUNDRY_AGENT_ID: docker-agent
       FOUNDRY_WORKSPACE_DIR: /workspace
+      VAULT_ADDR: http://vault:8200
       FOUNDRY_SELF_REPO: Lucas-William-Bateson/foundry
       FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
@@ -83,3 +110,4 @@ services:
 
 volumes:
   postgres_data:
+  vault_data:

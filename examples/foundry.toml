@@ -38,3 +38,8 @@ timezone = "UTC"
 
 [env]
 NODE_ENV = "production"
+
+# Vault secrets injection — the agent fetches these before running stages
+[secrets]
+vault_path = "myapp/prod"   # reads secret/data/myapp/prod from Vault KV v2
+# keys = ["DB_URL", "API_KEY"]  # optional: only inject specific keys

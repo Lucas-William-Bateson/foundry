@@ -47,6 +47,12 @@ async fn main() -> Result<()> {
         None
     };
 
+    if trusted_agent_config.has_vault() {
+        info!("Vault integration enabled ({})", trusted_agent_config.vault_addr.as_deref().unwrap_or("unknown"));
+    } else {
+        warn!("Vault not configured — secrets injection disabled");
+    }
+
     let client = ServerClient::new(&trusted_agent_config);
 
     // Start the foundryd watchdog
