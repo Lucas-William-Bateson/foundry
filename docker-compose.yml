@@ -40,7 +40,7 @@ services:
     env_file:
       - secrets.env
     volumes:
-      - ~/.colima/default/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "8081:8081"
     restart: unless-stopped
@@ -74,7 +74,7 @@ services:
     env_file:
       - secrets.env
     volumes:
-      - ~/.colima/default/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock
       - ${FOUNDRY_WORKSPACE:-./workspace}:/workspace
       - .:/app
       - ${GITHUB_APP_PRIVATE_KEY_FILE}:/secrets/github-app.pem:ro
