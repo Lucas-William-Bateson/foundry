@@ -96,7 +96,7 @@ services:
       FOUNDRY_SELF_REPO: Lucas-William-Bateson/foundry
       FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
-      HOST_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_FILE}
+      HOST_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_FILE:-}
       DOCKER_HOST: unix:///var/run/docker.sock
     env_file:
       - secrets.env
@@ -104,7 +104,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${FOUNDRY_WORKSPACE:-./workspace}:/workspace
       - .:/app
-      - ${GITHUB_APP_PRIVATE_KEY_FILE}:/secrets/github-app.pem:ro
+      - ${GITHUB_APP_PRIVATE_KEY_FILE:-/dev/null}:/secrets/github-app.pem:ro
     working_dir: /app
     restart: unless-stopped
 
