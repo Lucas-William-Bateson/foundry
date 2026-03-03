@@ -11,20 +11,18 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::infrastructure::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, ScheduleSummary};
+use crate::infrastructure::db::{self, JobDetail};
 use crate::infrastructure::docker;
 use crate::AppState;
 
 fn static_dir() -> std::path::PathBuf {
-    let dir = if std::path::Path::new("/app/frontend/dist").exists() {
-        std::path::Path::new("/app/frontend/dist")
-    } else if std::path::Path::new("frontend/dist").exists() {
-        std::path::Path::new("frontend/dist")
-    } else {
-        std::path::Path::new("frontend/dist")
-    };
-    tracing::info!("Serving frontend from: {:?}", dir);
-    dir.to_path_buf()
+    let candidates = ["/app/frontend/dist", "frontend/dist"];
+    let dir = candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or(&"frontend/dist");
+    tracing::info!("Serving frontend from: {}", dir);
+    std::path::PathBuf::from(dir)
 }
 
 /// API routes — must be wrapped with require_auth in main.rs
@@ -72,18 +70,28 @@ struct JobsQuery {
     limit: Option<i32>,
 }
 
-async fn api_stats(State(state): State<Arc<AppState>>) -> Json<DashboardStats> {
-    let stats = db::get_dashboard_stats(&state.db).await.unwrap_or_default();
-    Json(stats)
+async fn api_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::get_dashboard_stats(&state.db).await {
+        Ok(stats) => Json(serde_json::json!(stats)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to fetch dashboard stats: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 async fn api_jobs(
     State(state): State<Arc<AppState>>,
     Query(query): Query<JobsQuery>,
-) -> Json<Vec<JobSummary>> {
-    let limit = query.limit.unwrap_or(50) as i64;
-    let jobs = db::list_jobs(&state.db, limit).await.unwrap_or_default();
-    Json(jobs)
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    match db::list_jobs(&state.db, limit).await {
+        Ok(jobs) => Json(serde_json::json!(jobs)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list jobs: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -98,6 +106,20 @@ struct LogEntry {
     timestamp: String,
     message: String,
     level: String,
+}
+
+/// Classify log level from a log line using prefix patterns rather than
+/// substring matching (which misclassifies lines like "0 errors found").
+fn classify_log_level(message: &str) -> String {
+    let trimmed = message.trim_start();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("ERROR") || upper.starts_with("STDERR:") || upper.starts_with("[ERROR") {
+        "error".to_string()
+    } else if upper.starts_with("WARN") || upper.starts_with("[WARN") {
+        "warning".to_string()
+    } else {
+        "info".to_string()
+    }
 }
 
 async fn api_job(
@@ -129,14 +151,8 @@ async fn api_job(
                 (chrono::Utc::now().to_rfc3339(), line.to_string())
             };
             
-            let level = if message.to_lowercase().contains("error") {
-                "error"
-            } else if message.to_lowercase().contains("warning") || message.to_lowercase().contains("warn") {
-                "warning"
-            } else {
-                "info"
-            }.to_string();
-            
+            let level = classify_log_level(&message);
+
             LogEntry { timestamp, message, level }
         })
         .collect();
@@ -144,9 +160,14 @@ async fn api_job(
     Json(Some(JobWithLogs { job, logs }))
 }
 
-async fn api_repos(State(state): State<Arc<AppState>>) -> Json<Vec<RepoSummary>> {
-    let repos = db::list_repos(&state.db).await.unwrap_or_default();
-    Json(repos)
+async fn api_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::list_repos(&state.db).await {
+        Ok(repos) => Json(serde_json::json!(repos)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list repos: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 async fn api_repo(
@@ -172,15 +193,25 @@ async fn api_repo_jobs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Query(query): Query<RepoJobsQuery>,
-) -> Json<Vec<JobSummary>> {
-    let limit = query.limit.unwrap_or(50) as i64;
-    let jobs = db::get_repo_jobs(&state.db, id, limit).await.unwrap_or_default();
-    Json(jobs)
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    match db::get_repo_jobs(&state.db, id, limit).await {
+        Ok(jobs) => Json(serde_json::json!(jobs)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list repo jobs: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
-async fn api_schedules(State(state): State<Arc<AppState>>) -> Json<Vec<ScheduleSummary>> {
-    let schedules = db::list_schedules(&state.db).await.unwrap_or_default();
-    Json(schedules)
+async fn api_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::list_schedules(&state.db).await {
+        Ok(schedules) => Json(serde_json::json!(schedules)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list schedules: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
