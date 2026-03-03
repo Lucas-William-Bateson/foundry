@@ -83,6 +83,58 @@ fn lexical_clean(path: &str) -> String {
     format!("/{}", components.join("/"))
 }
 
+/// Validate a deploy name: must be alphanumeric + hyphens only, max 63 chars.
+/// This is used as a Docker container name and compose project name.
+fn validate_deploy_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("Deploy name cannot be empty");
+    }
+    if name.len() > 63 {
+        anyhow::bail!("Deploy name too long (max 63 chars): {}", name);
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        anyhow::bail!(
+            "Deploy name contains invalid characters (only alphanumeric, hyphens, underscores allowed): {}",
+            name
+        );
+    }
+    Ok(())
+}
+
+/// Validate an env_file path: must be under the allowed volume prefixes
+/// or relative to the repo directory.
+fn validate_env_file_path(env_file: &str, repo_dir: &PathBuf) -> Result<()> {
+    if env_file.is_empty() {
+        anyhow::bail!("Env file path cannot be empty");
+    }
+
+    // If it's a relative path, it must be within the repo directory (no ..)
+    if !env_file.starts_with('/') {
+        let normalized = lexical_clean(&format!("{}/{}", repo_dir.display(), env_file));
+        let repo_prefix = repo_dir.to_string_lossy();
+        if !normalized.starts_with(repo_prefix.as_ref()) {
+            anyhow::bail!("Env file path escapes repo directory: {}", env_file);
+        }
+        return Ok(());
+    }
+
+    // Absolute paths must be under the same allowlist as volumes
+    let normalized = lexical_clean(env_file);
+    let allowed = ALLOWED_VOLUME_PREFIXES
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix));
+
+    if !allowed {
+        anyhow::bail!(
+            "Env file path not in allowlist: {}. Allowed prefixes: {:?}",
+            normalized,
+            ALLOWED_VOLUME_PREFIXES
+        );
+    }
+
+    Ok(())
+}
+
 pub(crate) async fn run_deploy(
     client: &ServerClient,
     job: &ClaimedJob,
@@ -91,6 +143,9 @@ pub(crate) async fn run_deploy(
     untrusted_repo_config: &FoundryConfig,
 ) -> Result<()> {
     let app_name = untrusted_repo_config.deploy.name.as_deref().unwrap_or(&job.repo_name);
+
+    // Validate deploy name before using it as container/project name
+    validate_deploy_name(app_name)?;
 
     client.log(job, &format!("🚀 Deploying {}", app_name)).await?;
 
@@ -107,8 +162,9 @@ pub(crate) async fn run_deploy(
             app_name.to_string(),
         ];
 
-        // Add env file if specified (absolute path on host)
+        // Add env file if specified (validated against allowlist)
         if let Some(env_file) = &untrusted_repo_config.deploy.env_file {
+            validate_env_file_path(env_file, repo_dir)?;
             client.log(job, &format!("Using env file: {}", env_file)).await?;
             args.push("--env-file".to_string());
             args.push(env_file.clone());
