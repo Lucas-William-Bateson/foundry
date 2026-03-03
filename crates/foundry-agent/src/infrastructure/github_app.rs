@@ -38,42 +38,6 @@ struct TokenResponse {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitStatus {
-    Pending,
-    Success,
-    Failure,
-    Error,
-}
-
-impl CommitStatus {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CommitStatus::Pending => "pending",
-            CommitStatus::Success => "success",
-            CommitStatus::Failure => "failure",
-            CommitStatus::Error => "error",
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct CreateStatusRequest<'a> {
-    state: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_url: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'a str>,
-    context: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckStatus {
-    Queued,
-    InProgress,
-    Completed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckConclusion {
     Success,
     Failure,
@@ -213,50 +177,6 @@ impl GitHubApp {
 
     pub fn authenticated_clone_url(&self, clone_url: &str, token: &str) -> String {
         clone_url.replace("https://", &format!("https://x-access-token:{}@", token))
-    }
-
-    pub async fn create_commit_status(
-        &self,
-        owner: &str,
-        repo: &str,
-        sha: &str,
-        status: CommitStatus,
-        description: Option<&str>,
-        target_url: Option<&str>,
-    ) -> Result<()> {
-        let token = self.get_installation_token().await?;
-
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/statuses/{}",
-            owner, repo, sha
-        );
-
-        let body = CreateStatusRequest {
-            state: status.as_str(),
-            target_url,
-            description,
-            context: "foundry",
-        };
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "foundry-agent")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to create commit status")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GitHub API error {}: {}", status, body);
-        }
-
-        Ok(())
     }
 
     pub async fn create_check_run(

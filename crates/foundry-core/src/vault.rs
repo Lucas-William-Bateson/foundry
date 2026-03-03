@@ -256,9 +256,15 @@ mod tests {
 
     #[test]
     fn test_from_env_returns_none_without_addr() {
-        std::env::remove_var("VAULT_ADDR");
-        std::env::remove_var("VAULT_ROLE_ID");
-        std::env::remove_var("VAULT_TOKEN");
+        // SAFETY: This test must not run in parallel with other tests that
+        // read these env vars. `cargo test` runs tests in the same process,
+        // so env mutation is inherently racy. We accept this for a unit test
+        // that verifies the "no config" path.
+        unsafe {
+            std::env::remove_var("VAULT_ADDR");
+            std::env::remove_var("VAULT_ROLE_ID");
+            std::env::remove_var("VAULT_TOKEN");
+        }
 
         let result = VaultClient::from_env().unwrap();
         assert!(result.is_none());
