@@ -91,22 +91,28 @@ pub(crate) async fn run_container(
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
 
+    // Stream stdout to server in real-time
+    let client_stdout = client.clone();
+    let job_id = job.id;
+    let claim_token = job.claim_token;
     let stdout_handle = tokio::spawn(async move {
-        let mut lines = Vec::new();
         let mut reader = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            lines.push(line);
+            let _ = client_stdout.log_raw(job_id, &claim_token, &line).await;
         }
-        lines
     });
 
+    // Stream stderr to server in real-time
+    let client_stderr = client.clone();
+    let job_id = job.id;
+    let claim_token = job.claim_token;
     let stderr_handle = tokio::spawn(async move {
-        let mut lines = Vec::new();
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
-            lines.push(format!("STDERR: {}", line));
+            let _ = client_stderr
+                .log_raw(job_id, &claim_token, &format!("STDERR: {}", line))
+                .await;
         }
-        lines
     });
 
     let timeout_duration = std::time::Duration::from_secs(timeout_secs);
@@ -119,16 +125,16 @@ pub(crate) async fn run_container(
         }
         Err(_) => {
             client.log(job, &format!("⏰ Build timed out after {} seconds", timeout_secs)).await?;
-            
+
             if let Err(e) = child.kill().await {
                 tracing::warn!("Failed to kill timed out process: {}", e);
             }
-            
+
             let container_list = Command::new("docker")
                 .args(["ps", "-q", "--filter", &format!("label=foundry.job_id={}", job.id)])
                 .output()
                 .await;
-            
+
             if let Ok(output) = container_list {
                 let container_ids = String::from_utf8_lossy(&output.stdout);
                 for container_id in container_ids.lines() {
@@ -141,22 +147,14 @@ pub(crate) async fn run_container(
                     }
                 }
             }
-            
+
             return Err(anyhow::anyhow!("Build timed out after {} seconds", timeout_secs));
         }
     };
 
-    if let Ok(stdout_lines) = stdout_handle.await {
-        for line in stdout_lines {
-            let _ = client.log(job, &line).await;
-        }
-    }
-
-    if let Ok(stderr_lines) = stderr_handle.await {
-        for line in stderr_lines {
-            let _ = client.log(job, &line).await;
-        }
-    }
+    // Wait for streaming tasks to finish flushing
+    let _ = stdout_handle.await;
+    let _ = stderr_handle.await;
 
     Ok(status.success())
 }
