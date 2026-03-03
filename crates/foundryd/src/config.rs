@@ -7,6 +7,7 @@ pub struct Config {
     pub bind_port: u16,
     pub database_url: String,
     pub github_webhook_secret: String,
+    pub agent_secret: Option<String>,
     pub tunnel: Option<TunnelConfig>,
     pub auth: Option<AuthConfig>,
 }
@@ -18,6 +19,7 @@ impl fmt::Debug for Config {
             .field("bind_port", &self.bind_port)
             .field("database_url", &"[REDACTED]")
             .field("github_webhook_secret", &"[REDACTED]")
+            .field("agent_secret", &self.agent_secret.as_ref().map(|_| "[REDACTED]"))
             .field("tunnel", &self.tunnel)
             .field("auth", &self.auth)
             .finish()
@@ -132,6 +134,7 @@ impl Config {
                 .context("DATABASE_URL must be set")?,
             github_webhook_secret: std::env::var("GITHUB_WEBHOOK_SECRET")
                 .context("GITHUB_WEBHOOK_SECRET must be set")?,
+            agent_secret: std::env::var("FOUNDRY_AGENT_SECRET").ok(),
             tunnel,
             auth,
         })

@@ -1,13 +1,13 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use foundry_core::{ApiResponse, ClaimRequest, ClaimResponse, FinishRequest, LogRequest, SyncScheduleRequest, SyncTriggersRequest};
 
@@ -22,6 +22,45 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/agent/metrics", post(report_metrics))
         .route("/agent/schedule", post(sync_schedule))
         .route("/agent/triggers", post(sync_triggers))
+}
+
+/// Middleware that validates the agent bearer token against FOUNDRY_AGENT_SECRET.
+/// If no secret is configured, all requests are allowed (backward-compatible).
+pub async fn require_agent_auth(
+    State(state): State<Arc<AppState>>,
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Some(ref expected) = state.config.agent_secret {
+        let auth_header = request
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok());
+
+        let provided = auth_header.and_then(|h| h.strip_prefix("Bearer "));
+
+        match provided {
+            Some(token) if token == expected => {}
+            Some(_) => {
+                warn!("Agent request with invalid bearer token");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ApiResponse::error("Invalid agent token")),
+                )
+                    .into_response();
+            }
+            None => {
+                warn!("Agent request missing Authorization header");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(ApiResponse::error("Agent authentication required")),
+                )
+                    .into_response();
+            }
+        }
+    }
+
+    next.run(request).await
 }
 
 async fn claim_job(

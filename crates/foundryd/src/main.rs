@@ -121,15 +121,21 @@ async fn main() -> Result<()> {
         let protected = Router::new()
             .merge(api::frontend::api_router())
             .route_layer(axum::middleware::from_fn_with_state(state.clone(), api::auth::require_auth));
-        app = app
+        let agent = Router::new()
             .merge(api::agent::router())
+            .route_layer(axum::middleware::from_fn_with_state(state.clone(), api::agent::require_agent_auth));
+        app = app
+            .merge(agent)
             .merge(protected)
             .merge(api::frontend::static_router()) // public: login page must load before session exists
             .merge(api::auth::router());
     } else {
+        let agent = Router::new()
+            .merge(api::agent::router())
+            .route_layer(axum::middleware::from_fn_with_state(state.clone(), api::agent::require_agent_auth));
         app = app
             .merge(api::frontend::router())
-            .merge(api::agent::router());
+            .merge(agent);
     }
 
     let app = app
