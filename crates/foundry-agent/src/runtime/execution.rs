@@ -8,7 +8,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, info, warn};
 
 use foundry_core::{ClaimedJob, FoundryConfig, VaultClient};
 use secrecy::ExposeSecret;
@@ -16,7 +16,6 @@ use secrecy::ExposeSecret;
 use crate::types::config::Config;
 use crate::domain::deploy::run_deploy;
 use crate::infrastructure::docker::{build_image, run_container};
-use crate::infrastructure::github_app::CheckConclusion;
 use crate::infrastructure::github_app::GitHubApp;
 use crate::api::server::ServerClient;
 use crate::domain::stages::run_stages;
@@ -385,109 +384,4 @@ async fn fetch_vault_secrets(
     }
 
     Ok(secrets)
-}
-
-
-pub async fn agent_claim_loop(client: ServerClient, trusted_agent_config: Config, github_app: Option<GitHubApp>) {
-    use std::time::Duration;
-    
-    
-    loop {
-        match client.claim_job().await {
-            Ok(Some(job)) => {
-                handle_claimed_job(&client, &trusted_agent_config, github_app.as_ref(), job).await;
-            }
-            Ok(None) => {
-                tokio::time::sleep(Duration::from_secs(trusted_agent_config.poll_interval_secs)).await;
-            }
-            Err(e) => {
-                warn!("Failed to claim job: {}", e);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
-
-async fn handle_claimed_job(client: &ServerClient, trusted_agent_config: &Config, github_app: Option<&GitHubApp>, job: foundry_core::ClaimedJob) {
-    use tracing::{info, error};
-    
-
-    info!(
-        "Claimed job {} for {}/{} @ {}",
-        job.id,
-        job.repo_owner,
-        job.repo_name,
-        &job.git_sha[..8.min(job.git_sha.len())]
-    );
-
-    let check_run_id = create_github_check_run(github_app, &job).await;
-
-    let (success, error_msg) = match execute_pipeline(client, &job, trusted_agent_config, github_app).await {
-        Ok(()) => {
-            info!("Job {} completed successfully", job.id);
-            (true, None)
-        }
-        Err(e) => {
-            error!("Job {} failed: {}", job.id, e);
-            let _ = client.log(&job, &format!("ERROR: {}", e)).await;
-            (false, Some(e.to_string()))
-        }
-    };
-
-    complete_github_check_run(github_app, check_run_id, &job, success, error_msg.as_deref(), client).await;
-
-    if let Err(e) = client.report_result(&job, success).await {
-        error!("Failed to report job completion: {}", e);
-    }
-}
-
-async fn create_github_check_run(github_app: Option<&GitHubApp>, job: &foundry_core::ClaimedJob) -> Option<i64> {
-    use tracing::{info, warn};
-    let app = github_app?;
-    info!("Creating GitHub check run for {}/{}", job.repo_owner, job.repo_name);
-    match app.create_check_run(&job.repo_owner, &job.repo_name, &job.git_sha, "Foundry CI").await {
-        Ok(id) => {
-            info!("Created check run with ID {}", id);
-            Some(id)
-        }
-        Err(e) => {
-            warn!("Failed to create check run: {}", e);
-            None
-        }
-    }
-}
-
-async fn complete_github_check_run(
-    github_app: Option<&GitHubApp>,
-    check_id: Option<i64>,
-    job: &foundry_core::ClaimedJob,
-    success: bool,
-    error_msg: Option<&str>,
-    client: &ServerClient, // using it for logs
-) {
-    
-    
-    let app = if let Some(app) = github_app { app } else { return };
-    let check_id = if let Some(id) = check_id { id } else { return };
-
-    let logs = match client.get_logs(job).await {
-        Ok(logs) => Some(logs),
-        Err(e) => {
-            warn!("Failed to fetch logs: {}", e);
-            None
-        }
-    };
-
-    let (conclusion, summary) = if success {
-        (CheckConclusion::Success, "Build completed successfully! ✅".to_string())
-    } else {
-        let summary = format!("Build failed ❌
-
-{}", error_msg.unwrap_or_default());
-        (CheckConclusion::Failure, summary)
-    };
-
-    if let Err(e) = app.complete_check_run(&job.repo_owner, &job.repo_name, check_id, conclusion, &summary, logs.as_deref()).await {
-        warn!("Failed to complete check run: {}", e);
-    }
 }

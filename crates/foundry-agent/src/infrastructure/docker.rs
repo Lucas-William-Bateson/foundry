@@ -11,10 +11,6 @@ use foundry_core::{ClaimedJob, FoundryConfig};
 
 use crate::api::server::ServerClient;
 
-// Re-export for backward compatibility
-pub use crate::runtime::execution::execute_pipeline;
-pub use crate::runtime::execution::JobMetrics;
-
 pub(crate) async fn build_image(
     client: &ServerClient,
     job: &ClaimedJob,
