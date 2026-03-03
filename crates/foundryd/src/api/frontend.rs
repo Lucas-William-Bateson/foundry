@@ -219,6 +219,21 @@ async fn api_delete_schedule(
 
 // Docker Container API Endpoints
 
+const FOUNDRY_CONTAINER_PREFIX: &str = "foundry-";
+
+/// Validate that a container ID or name belongs to Foundry.
+/// Only allows operations on containers with the "foundry-" prefix.
+fn is_foundry_container(id: &str) -> bool {
+    // Allow short hex IDs (docker container IDs) — we'll verify after lookup
+    // Allow names starting with foundry-
+    id.starts_with(FOUNDRY_CONTAINER_PREFIX)
+}
+
+/// Validate that a project name belongs to Foundry.
+fn is_foundry_project(name: &str) -> bool {
+    name.starts_with("foundry") || name == "foundry"
+}
+
 #[derive(Deserialize)]
 struct ContainersQuery {
     project: Option<String>,
@@ -227,8 +242,17 @@ struct ContainersQuery {
 async fn api_list_containers(
     Query(query): Query<ContainersQuery>,
 ) -> impl IntoResponse {
-    match docker::list_containers(query.project.as_deref()).await {
-        Ok(containers) => (StatusCode::OK, Json(serde_json::json!(containers))).into_response(),
+    // Always filter to foundry containers only
+    let filter = query.project.as_deref().or(Some(FOUNDRY_CONTAINER_PREFIX));
+    match docker::list_containers(filter).await {
+        Ok(containers) => {
+            // Double-check: only return containers whose name starts with foundry-
+            let filtered: Vec<_> = containers
+                .into_iter()
+                .filter(|c| c.name.starts_with(FOUNDRY_CONTAINER_PREFIX) || c.project.as_deref().map_or(false, |p| is_foundry_project(p)))
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!(filtered))).into_response()
+        }
         Err(e) => {
             tracing::error!("{}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
@@ -245,6 +269,9 @@ async fn api_container_logs(
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied: not a Foundry container"}))).into_response();
+    }
     match docker::get_container_logs(&id, query.lines).await {
         Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
         Err(e) => {
@@ -258,6 +285,9 @@ async fn api_container_logs_stream(
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied: not a Foundry container"}))).into_response();
+    }
     match docker::stream_container_logs(&id, query.lines).await {
         Ok(rx) => {
             let stream = ReceiverStream::new(rx).map(|line| {
@@ -275,6 +305,9 @@ async fn api_container_logs_stream(
 async fn api_restart_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::restart_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -287,6 +320,9 @@ async fn api_restart_container(
 async fn api_stop_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::stop_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -299,6 +335,9 @@ async fn api_stop_container(
 async fn api_start_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::start_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -323,6 +362,9 @@ async fn api_list_projects() -> impl IntoResponse {
 async fn api_restart_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::restart_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -335,6 +377,9 @@ async fn api_restart_project(
 async fn api_stop_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::stop_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -347,6 +392,9 @@ async fn api_stop_project(
 async fn api_start_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::start_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
