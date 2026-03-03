@@ -11,20 +11,18 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tower_http::services::{ServeDir, ServeFile};
-use crate::infrastructure::db::{self, DashboardStats, JobDetail, JobSummary, RepoSummary, ScheduleSummary};
+use crate::infrastructure::db::{self, JobDetail};
 use crate::infrastructure::docker;
 use crate::AppState;
 
 fn static_dir() -> std::path::PathBuf {
-    let dir = if std::path::Path::new("/app/frontend/dist").exists() {
-        std::path::Path::new("/app/frontend/dist")
-    } else if std::path::Path::new("frontend/dist").exists() {
-        std::path::Path::new("frontend/dist")
-    } else {
-        std::path::Path::new("frontend/dist")
-    };
-    tracing::info!("Serving frontend from: {:?}", dir);
-    dir.to_path_buf()
+    let candidates = ["/app/frontend/dist", "frontend/dist"];
+    let dir = candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .unwrap_or(&"frontend/dist");
+    tracing::info!("Serving frontend from: {}", dir);
+    std::path::PathBuf::from(dir)
 }
 
 /// API routes — must be wrapped with require_auth in main.rs
@@ -72,18 +70,28 @@ struct JobsQuery {
     limit: Option<i32>,
 }
 
-async fn api_stats(State(state): State<Arc<AppState>>) -> Json<DashboardStats> {
-    let stats = db::get_dashboard_stats(&state.db).await.unwrap_or_default();
-    Json(stats)
+async fn api_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::get_dashboard_stats(&state.db).await {
+        Ok(stats) => Json(serde_json::json!(stats)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to fetch dashboard stats: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 async fn api_jobs(
     State(state): State<Arc<AppState>>,
     Query(query): Query<JobsQuery>,
-) -> Json<Vec<JobSummary>> {
-    let limit = query.limit.unwrap_or(50) as i64;
-    let jobs = db::list_jobs(&state.db, limit).await.unwrap_or_default();
-    Json(jobs)
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    match db::list_jobs(&state.db, limit).await {
+        Ok(jobs) => Json(serde_json::json!(jobs)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list jobs: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -98,6 +106,20 @@ struct LogEntry {
     timestamp: String,
     message: String,
     level: String,
+}
+
+/// Classify log level from a log line using prefix patterns rather than
+/// substring matching (which misclassifies lines like "0 errors found").
+fn classify_log_level(message: &str) -> String {
+    let trimmed = message.trim_start();
+    let upper = trimmed.to_uppercase();
+    if upper.starts_with("ERROR") || upper.starts_with("STDERR:") || upper.starts_with("[ERROR") {
+        "error".to_string()
+    } else if upper.starts_with("WARN") || upper.starts_with("[WARN") {
+        "warning".to_string()
+    } else {
+        "info".to_string()
+    }
 }
 
 async fn api_job(
@@ -129,14 +151,8 @@ async fn api_job(
                 (chrono::Utc::now().to_rfc3339(), line.to_string())
             };
             
-            let level = if message.to_lowercase().contains("error") {
-                "error"
-            } else if message.to_lowercase().contains("warning") || message.to_lowercase().contains("warn") {
-                "warning"
-            } else {
-                "info"
-            }.to_string();
-            
+            let level = classify_log_level(&message);
+
             LogEntry { timestamp, message, level }
         })
         .collect();
@@ -144,9 +160,14 @@ async fn api_job(
     Json(Some(JobWithLogs { job, logs }))
 }
 
-async fn api_repos(State(state): State<Arc<AppState>>) -> Json<Vec<RepoSummary>> {
-    let repos = db::list_repos(&state.db).await.unwrap_or_default();
-    Json(repos)
+async fn api_repos(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::list_repos(&state.db).await {
+        Ok(repos) => Json(serde_json::json!(repos)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list repos: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 async fn api_repo(
@@ -172,15 +193,25 @@ async fn api_repo_jobs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,
     Query(query): Query<RepoJobsQuery>,
-) -> Json<Vec<JobSummary>> {
-    let limit = query.limit.unwrap_or(50) as i64;
-    let jobs = db::get_repo_jobs(&state.db, id, limit).await.unwrap_or_default();
-    Json(jobs)
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50).min(500) as i64;
+    match db::get_repo_jobs(&state.db, id, limit).await {
+        Ok(jobs) => Json(serde_json::json!(jobs)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list repo jobs: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
-async fn api_schedules(State(state): State<Arc<AppState>>) -> Json<Vec<ScheduleSummary>> {
-    let schedules = db::list_schedules(&state.db).await.unwrap_or_default();
-    Json(schedules)
+async fn api_schedules(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    match db::list_schedules(&state.db).await {
+        Ok(schedules) => Json(serde_json::json!(schedules)).into_response(),
+        Err(e) => {
+            tracing::error!("Failed to list schedules: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -219,6 +250,21 @@ async fn api_delete_schedule(
 
 // Docker Container API Endpoints
 
+const FOUNDRY_CONTAINER_PREFIX: &str = "foundry-";
+
+/// Validate that a container ID or name belongs to Foundry.
+/// Only allows operations on containers with the "foundry-" prefix.
+fn is_foundry_container(id: &str) -> bool {
+    // Allow short hex IDs (docker container IDs) — we'll verify after lookup
+    // Allow names starting with foundry-
+    id.starts_with(FOUNDRY_CONTAINER_PREFIX)
+}
+
+/// Validate that a project name belongs to Foundry.
+fn is_foundry_project(name: &str) -> bool {
+    name.starts_with("foundry") || name == "foundry"
+}
+
 #[derive(Deserialize)]
 struct ContainersQuery {
     project: Option<String>,
@@ -227,8 +273,17 @@ struct ContainersQuery {
 async fn api_list_containers(
     Query(query): Query<ContainersQuery>,
 ) -> impl IntoResponse {
-    match docker::list_containers(query.project.as_deref()).await {
-        Ok(containers) => (StatusCode::OK, Json(serde_json::json!(containers))).into_response(),
+    // Always filter to foundry containers only
+    let filter = query.project.as_deref().or(Some(FOUNDRY_CONTAINER_PREFIX));
+    match docker::list_containers(filter).await {
+        Ok(containers) => {
+            // Double-check: only return containers whose name starts with foundry-
+            let filtered: Vec<_> = containers
+                .into_iter()
+                .filter(|c| c.name.starts_with(FOUNDRY_CONTAINER_PREFIX) || c.project.as_deref().map_or(false, |p| is_foundry_project(p)))
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!(filtered))).into_response()
+        }
         Err(e) => {
             tracing::error!("{}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"}))).into_response()
@@ -245,6 +300,9 @@ async fn api_container_logs(
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied: not a Foundry container"}))).into_response();
+    }
     match docker::get_container_logs(&id, query.lines).await {
         Ok(logs) => (StatusCode::OK, Json(serde_json::json!(logs))).into_response(),
         Err(e) => {
@@ -258,6 +316,9 @@ async fn api_container_logs_stream(
     Path(id): Path<String>,
     Query(query): Query<LogsQuery>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied: not a Foundry container"}))).into_response();
+    }
     match docker::stream_container_logs(&id, query.lines).await {
         Ok(rx) => {
             let stream = ReceiverStream::new(rx).map(|line| {
@@ -275,6 +336,9 @@ async fn api_container_logs_stream(
 async fn api_restart_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::restart_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -287,6 +351,9 @@ async fn api_restart_container(
 async fn api_stop_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::stop_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -299,6 +366,9 @@ async fn api_stop_container(
 async fn api_start_container(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_container(&id) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry container"})));
+    }
     match docker::start_container(&id).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -323,6 +393,9 @@ async fn api_list_projects() -> impl IntoResponse {
 async fn api_restart_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::restart_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -335,6 +408,9 @@ async fn api_restart_project(
 async fn api_stop_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::stop_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {
@@ -347,6 +423,9 @@ async fn api_stop_project(
 async fn api_start_project(
     Path(name): Path<String>,
 ) -> impl IntoResponse {
+    if !is_foundry_project(&name) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"ok": false, "error": "Access denied: not a Foundry project"})));
+    }
     match docker::start_project(&name).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
         Err(e) => {

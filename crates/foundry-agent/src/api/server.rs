@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder};
 use tracing::debug;
 
 use foundry_core::{
@@ -14,6 +14,7 @@ pub struct ServerClient {
     client: Client,
     server_url: String,
     agent_id: String,
+    agent_secret: Option<String>,
 }
 
 impl ServerClient {
@@ -22,6 +23,16 @@ impl ServerClient {
             client: Client::new(),
             server_url: config.server_url.clone(),
             agent_id: config.agent_id.clone(),
+            agent_secret: config.agent_secret.clone(),
+        }
+    }
+
+    /// Add bearer token authentication if configured.
+    fn auth(&self, req: RequestBuilder) -> RequestBuilder {
+        if let Some(ref secret) = self.agent_secret {
+            req.bearer_auth(secret)
+        } else {
+            req
         }
     }
 
@@ -32,9 +43,7 @@ impl ServerClient {
         };
 
         let response = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await
             .context("Failed to connect to server")?;
@@ -70,9 +79,7 @@ impl ServerClient {
         debug!("[job {}] {}", job.id, line);
 
         let resp: ApiResponse = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await?
             .json()
@@ -96,9 +103,7 @@ impl ServerClient {
         debug!("[job {}] {}", job_id, line);
 
         let resp: ApiResponse = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await?
             .json()
@@ -120,9 +125,7 @@ impl ServerClient {
         };
 
         let resp: ApiResponse = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await?
             .json()
@@ -135,7 +138,7 @@ impl ServerClient {
         Ok(())
     }
 
-    pub async fn report_metrics(&self, job: &ClaimedJob, metrics: &crate::infrastructure::docker::JobMetrics) -> Result<()> {
+    pub async fn report_metrics(&self, job: &ClaimedJob, metrics: &crate::runtime::execution::JobMetrics) -> Result<()> {
         let url = format!("{}/agent/metrics", self.server_url);
         
         #[derive(serde::Serialize)]
@@ -152,12 +155,10 @@ impl ServerClient {
         };
 
         let resp = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await;
-            
+
         if let Err(e) = resp {
             debug!("Failed to report metrics: {}", e);
         }
@@ -169,9 +170,11 @@ impl ServerClient {
         let url = format!("{}/agent/logs/{}", self.server_url, job.id);
 
         let resp = self
-            .client
-            .get(&url)
-            .query(&[("claim_token", job.claim_token.to_string())])
+            .auth(
+                self.client
+                    .get(&url)
+                    .query(&[("claim_token", job.claim_token.to_string())]),
+            )
             .send()
             .await
             .context("Failed to fetch logs")?;
@@ -200,9 +203,7 @@ impl ServerClient {
         };
 
         let resp: ApiResponse = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await?
             .json()
@@ -221,7 +222,7 @@ impl ServerClient {
         triggers: &foundry_core::config::TriggersConfig,
     ) -> Result<()> {
         let url = format!("{}/agent/triggers", self.server_url);
-        
+
         let req = SyncTriggersRequest {
             repo_id: job.repo_id,
             claim_token: job.claim_token,
@@ -231,9 +232,7 @@ impl ServerClient {
         };
 
         let resp: ApiResponse = self
-            .client
-            .post(&url)
-            .json(&req)
+            .auth(self.client.post(&url).json(&req))
             .send()
             .await?
             .json()

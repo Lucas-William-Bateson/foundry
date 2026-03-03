@@ -3,13 +3,27 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
 pub struct GitHubApp {
     app_id: String,
     installation_id: String,
     private_key: EncodingKey,
     client: Client,
+    /// Cached installation token with its expiry (epoch seconds).
+    /// Installation tokens are valid for 1 hour; we refresh 5 minutes early.
+    token_cache: RwLock<Option<CachedToken>>,
 }
+
+struct CachedToken {
+    token: String,
+    /// Epoch seconds when this token expires.
+    expires_at: u64,
+}
+
+/// Refresh the token 5 minutes before it actually expires to avoid
+/// races where we hand out a token that's about to become invalid.
+const TOKEN_REFRESH_MARGIN_SECS: u64 = 300;
 
 #[derive(Serialize)]
 struct Claims {
@@ -21,42 +35,6 @@ struct Claims {
 #[derive(Deserialize)]
 struct TokenResponse {
     token: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommitStatus {
-    Pending,
-    Success,
-    Failure,
-    Error,
-}
-
-impl CommitStatus {
-    fn as_str(&self) -> &'static str {
-        match self {
-            CommitStatus::Pending => "pending",
-            CommitStatus::Success => "success",
-            CommitStatus::Failure => "failure",
-            CommitStatus::Error => "error",
-        }
-    }
-}
-
-#[derive(Serialize)]
-struct CreateStatusRequest<'a> {
-    state: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    target_url: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<&'a str>,
-    context: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckStatus {
-    Queued,
-    InProgress,
-    Completed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +99,7 @@ impl GitHubApp {
             installation_id,
             private_key,
             client: Client::new(),
+            token_cache: RwLock::new(None),
         })
     }
 
@@ -141,6 +120,31 @@ impl GitHubApp {
     }
 
     pub async fn get_installation_token(&self) -> Result<String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Check cache with read lock first
+        {
+            let cache = self.token_cache.read().await;
+            if let Some(ref cached) = *cache {
+                if now < cached.expires_at.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
+                    return Ok(cached.token.clone());
+                }
+            }
+        }
+
+        // Cache miss or expired — fetch new token under write lock
+        let mut cache = self.token_cache.write().await;
+
+        // Double-check: another task may have refreshed while we waited for the write lock
+        if let Some(ref cached) = *cache {
+            if now < cached.expires_at.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
+                return Ok(cached.token.clone());
+            }
+        }
+
         let jwt = self.generate_jwt()?;
 
         let url = format!(
@@ -162,55 +166,17 @@ impl GitHubApp {
             .await
             .context("Failed to parse token response")?;
 
+        // GitHub installation tokens are valid for 1 hour (3600 seconds)
+        *cache = Some(CachedToken {
+            token: resp.token.clone(),
+            expires_at: now + 3600,
+        });
+
         Ok(resp.token)
     }
 
     pub fn authenticated_clone_url(&self, clone_url: &str, token: &str) -> String {
         clone_url.replace("https://", &format!("https://x-access-token:{}@", token))
-    }
-
-    pub async fn create_commit_status(
-        &self,
-        owner: &str,
-        repo: &str,
-        sha: &str,
-        status: CommitStatus,
-        description: Option<&str>,
-        target_url: Option<&str>,
-    ) -> Result<()> {
-        let token = self.get_installation_token().await?;
-
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/statuses/{}",
-            owner, repo, sha
-        );
-
-        let body = CreateStatusRequest {
-            state: status.as_str(),
-            target_url,
-            description,
-            context: "foundry",
-        };
-
-        let resp = self
-            .client
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "foundry-agent")
-            .header("X-GitHub-Api-Version", "2022-11-28")
-            .json(&body)
-            .send()
-            .await
-            .context("Failed to create commit status")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GitHub API error {}: {}", status, body);
-        }
-
-        Ok(())
     }
 
     pub async fn create_check_run(

@@ -1,28 +1,36 @@
 use std::sync::Arc;
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use cron::Schedule;
 use sqlx::PgPool;
-use tracing::{info, error, debug};
+use tracing::{info, error, debug, warn};
+
+/// How long a job can stay in 'running' before being considered stale.
+const STALE_JOB_TIMEOUT_MINUTES: i64 = 120;
 
 pub async fn run_scheduler(pool: Arc<PgPool>) {
     info!("Starting scheduler");
-    
+
     loop {
         if let Err(e) = check_and_run_scheduled_jobs(&pool).await {
             error!("Scheduler error: {}", e);
         }
-        
+
+        if let Err(e) = reap_stale_jobs(&pool).await {
+            error!("Stale job reaper error: {}", e);
+        }
+
         tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
     }
 }
 
 async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
     let now = Utc::now();
-    
+
     let due_jobs = sqlx::query_as::<_, ScheduledJobRow>(
         r#"
-        SELECT id, repo_id, cron_expression, branch
+        SELECT id, repo_id, cron_expression, branch, COALESCE(timezone, 'UTC') as timezone
         FROM scheduled_job
         WHERE enabled = TRUE AND (next_run_at IS NULL OR next_run_at <= $1)
         "#,
@@ -30,16 +38,23 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
     .bind(now)
     .fetch_all(pool)
     .await?;
-    
+
     for scheduled in due_jobs {
         debug!("Processing scheduled job {} for repo {}", scheduled.id, scheduled.repo_id);
-        
-        if let Err(e) = enqueue_scheduled_job(pool, &scheduled).await {
+
+        // Wrap enqueue + next_run update in a transaction to prevent
+        // duplicate enqueues if the process crashes between the two operations.
+        let mut tx = pool.begin().await?;
+
+        if let Err(e) = enqueue_scheduled_job(&mut *tx, &scheduled).await {
             error!("Failed to enqueue scheduled job {}: {}", scheduled.id, e);
+            tx.rollback().await.ok();
+            continue;
         }
-        
+
         if let Ok(schedule) = Schedule::from_str(&scheduled.cron_expression) {
-            if let Some(next) = schedule.upcoming(Utc).next() {
+            let next = compute_next_run(&schedule, &scheduled.timezone);
+            if let Some(next) = next {
                 sqlx::query(
                     r#"
                     UPDATE scheduled_job
@@ -50,46 +65,39 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
                 .bind(scheduled.id)
                 .bind(now)
                 .bind(next)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?;
             }
         }
+
+        tx.commit().await?;
     }
-    
+
     Ok(())
 }
 
-async fn enqueue_scheduled_job(pool: &PgPool, scheduled: &ScheduledJobRow) -> anyhow::Result<()> {
-    let repo = sqlx::query_as::<_, RepoInfo>(
-        r#"SELECT name, default_branch FROM repo WHERE id = $1"#,
-    )
-    .bind(scheduled.repo_id)
-    .fetch_optional(pool)
-    .await?;
-    
-    let Some(repo) = repo else {
-        return Err(anyhow::anyhow!("Repo not found"));
-    };
-    
-    let branch = scheduled.branch.as_deref().unwrap_or(
-        repo.default_branch.as_deref().unwrap_or("main")
-    );
-    
+async fn enqueue_scheduled_job<'e, E>(executor: E, scheduled: &ScheduledJobRow) -> anyhow::Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    // We need two queries, so accept a generic executor that works with both pool and transaction.
+    // For the repo lookup, we embed it in a single INSERT ... SELECT to keep it in one statement.
+    let branch = scheduled.branch.as_deref().unwrap_or("main");
     let git_ref = format!("refs/heads/{}", branch);
-    
+
     // IMPLICIT CONTRACT: The "RESOLVE:{branch}" prefix is an implicit contract
-    // with foundry-agent's docker.rs, which detects this prefix at clone time
+    // with foundry-agent's execution.rs, which detects this prefix at clone time
     // and resolves it to the actual branch ref (instead of treating it as a SHA).
-    // See: crates/foundry-agent/src/docker.rs where `starts_with("RESOLVE:")` is checked.
     let placeholder_sha = format!("RESOLVE:{}", branch);
-    
-    sqlx::query(
+
+    let result = sqlx::query(
         r#"
         INSERT INTO job (
             repo_id, git_sha, git_ref, status, trigger_type,
             scheduled_job_id, commit_message
         )
-        VALUES ($1, $2, $3, 'queued', 'scheduled', $4, $5)
+        SELECT $1, $2, $3, 'queued', 'scheduled', $4, $5
+        WHERE EXISTS (SELECT 1 FROM repo WHERE id = $1)
         "#,
     )
     .bind(scheduled.repo_id)
@@ -97,11 +105,39 @@ async fn enqueue_scheduled_job(pool: &PgPool, scheduled: &ScheduledJobRow) -> an
     .bind(&git_ref)
     .bind(scheduled.id)
     .bind(format!("Scheduled build: {}", scheduled.cron_expression))
+    .execute(executor)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(anyhow::anyhow!("Repo {} not found", scheduled.repo_id));
+    }
+
+    info!("Enqueued scheduled job for repo {} branch {}", scheduled.repo_id, branch);
+
+    Ok(())
+}
+
+/// Reap jobs stuck in 'running' state for longer than STALE_JOB_TIMEOUT_MINUTES.
+/// These are typically caused by agent crashes or network partitions.
+async fn reap_stale_jobs(pool: &PgPool) -> anyhow::Result<()> {
+    let result = sqlx::query(
+        r#"
+        UPDATE job
+        SET status = 'failed',
+            finished_at = NOW()
+        WHERE status = 'running'
+          AND started_at < NOW() - make_interval(mins => $1)
+        "#,
+    )
+    .bind(STALE_JOB_TIMEOUT_MINUTES as i32)
     .execute(pool)
     .await?;
-    
-    info!("Enqueued scheduled job for repo {} branch {}", repo.name, branch);
-    
+
+    let reaped = result.rows_affected();
+    if reaped > 0 {
+        warn!("Reaped {} stale running job(s) (older than {} minutes)", reaped, STALE_JOB_TIMEOUT_MINUTES);
+    }
+
     Ok(())
 }
 
@@ -114,9 +150,15 @@ pub async fn upsert_schedule(
 ) -> anyhow::Result<i64> {
     let schedule = Schedule::from_str(cron_expression)
         .map_err(|e| anyhow::anyhow!("Invalid cron expression: {}", e))?;
-    
-    let next_run: Option<DateTime<Utc>> = schedule.upcoming(Utc).next();
-    
+
+    // Validate timezone if provided
+    let tz_str = timezone.unwrap_or("UTC");
+    if tz_str.parse::<Tz>().is_err() {
+        anyhow::bail!("Invalid timezone: {}", tz_str);
+    }
+
+    let next_run = compute_next_run(&schedule, tz_str);
+
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO scheduled_job (repo_id, cron_expression, branch, timezone, next_run_at)
@@ -136,13 +178,13 @@ pub async fn upsert_schedule(
     .bind(next_run)
     .fetch_one(pool)
     .await?;
-    
+
     Ok(row.0)
 }
 
 pub async fn delete_schedule(pool: &PgPool, repo_id: i64, branch: Option<&str>) -> anyhow::Result<bool> {
     let branch = branch.unwrap_or("main");
-    
+
     let result = sqlx::query(
         r#"DELETE FROM scheduled_job WHERE repo_id = $1 AND branch = $2"#,
     )
@@ -150,8 +192,27 @@ pub async fn delete_schedule(pool: &PgPool, repo_id: i64, branch: Option<&str>) 
     .bind(branch)
     .execute(pool)
     .await?;
-    
+
     Ok(result.rows_affected() > 0)
+}
+
+/// Compute the next run time for a cron schedule, respecting the configured timezone.
+/// The cron expression is evaluated in the given timezone, then converted to UTC
+/// for storage in the database.
+fn compute_next_run(schedule: &Schedule, timezone_str: &str) -> Option<DateTime<Utc>> {
+    match timezone_str.parse::<Tz>() {
+        Ok(tz) => {
+            // Evaluate the cron in the user's timezone, then convert to UTC
+            schedule
+                .upcoming(tz)
+                .next()
+                .map(|dt| dt.with_timezone(&Utc))
+        }
+        Err(_) => {
+            warn!("Invalid timezone '{}', falling back to UTC", timezone_str);
+            schedule.upcoming(Utc).next()
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -160,10 +221,5 @@ struct ScheduledJobRow {
     repo_id: i64,
     cron_expression: String,
     branch: Option<String>,
-}
-
-#[derive(sqlx::FromRow)]
-struct RepoInfo {
-    name: String,
-    default_branch: Option<String>,
+    timezone: String,
 }

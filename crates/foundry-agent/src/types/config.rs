@@ -21,6 +21,8 @@ pub struct Config {
     pub vault_bootstrap_token: Option<SecretString>,
     /// Vault address (e.g. http://vault:8200)
     pub vault_addr: Option<String>,
+    /// Shared secret for authenticating with the server
+    pub agent_secret: Option<String>,
 }
 
 impl Config {
@@ -59,6 +61,7 @@ impl Config {
             vault_addr: std::env::var("VAULT_ADDR").ok(),
             vault_role_id: std::env::var("VAULT_ROLE_ID").ok(),
             vault_bootstrap_token: Self::load_vault_bootstrap_token(),
+            agent_secret: std::env::var("FOUNDRY_AGENT_SECRET").ok(),
         })
     }
 
