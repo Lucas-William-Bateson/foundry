@@ -13,6 +13,76 @@ use crate::types::config::Config;
 use crate::infrastructure::docker::build_image;
 use crate::api::server::ServerClient;
 
+/// Allowed host path prefixes for volume mounts.
+/// Only these directories (and their subdirectories) may be mounted.
+const ALLOWED_VOLUME_PREFIXES: &[&str] = &[
+    "/data/",
+    "/opt/foundry/",
+    "/tmp/foundry/",
+    "/var/lib/foundry/",
+];
+
+/// Validate a volume mount specification.
+/// Returns Ok(()) if safe, Err with reason if not.
+fn validate_volume_mount(vol: &str) -> Result<()> {
+    let host_part = vol.split(':').next().unwrap_or("");
+
+    // Block empty host paths
+    if host_part.is_empty() {
+        anyhow::bail!("Empty host path in volume mount");
+    }
+
+    // Only allow named volumes (no path separator) or absolute paths in the allowlist
+    if !host_part.contains('/') {
+        // Named volume — always allowed
+        return Ok(());
+    }
+
+    // Must be absolute path
+    if !host_part.starts_with('/') {
+        anyhow::bail!("Volume mount must use absolute path: {}", host_part);
+    }
+
+    // Canonicalize to resolve "..", symlinks, etc.
+    // Use the lexical approach since the path may not exist yet on the host
+    let normalized = lexical_clean(host_part);
+
+    // Check for path traversal after normalization
+    if normalized.contains("..") {
+        anyhow::bail!("Path traversal detected in volume mount: {}", host_part);
+    }
+
+    // Must be under an allowed prefix
+    let allowed = ALLOWED_VOLUME_PREFIXES
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix) || normalized == prefix.trim_end_matches('/'));
+
+    if !allowed {
+        anyhow::bail!(
+            "Volume mount host path not in allowlist: {}. Allowed prefixes: {:?}",
+            normalized,
+            ALLOWED_VOLUME_PREFIXES
+        );
+    }
+
+    Ok(())
+}
+
+/// Lexical path cleaning: resolve `.` and `..` components without filesystem access.
+fn lexical_clean(path: &str) -> String {
+    let mut components: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                components.pop();
+            }
+            other => components.push(other),
+        }
+    }
+    format!("/{}", components.join("/"))
+}
+
 pub(crate) async fn run_deploy(
     client: &ServerClient,
     job: &ClaimedJob,
@@ -91,27 +161,13 @@ pub(crate) async fn run_deploy(
             args.push(format!("{}:{}", port, port));
         }
 
-        // Add volume mounts (validated)
+        // Add volume mounts (validated against allowlist)
         if let Some(volumes) = &untrusted_repo_config.deploy.volumes {
             for vol in volumes {
-                // Validate volume spec: block host paths that could compromise the host
-                let host_part = vol.split(':').next().unwrap_or("");
-                let blocked = [
-                    "/var/run/docker.sock",
-                    "/etc",
-                    "/root",
-                    "/home",
-                    "/proc",
-                    "/sys",
-                    "/dev",
-                    "/boot",
-                    "/var/run",
-                ];
-                let is_blocked = blocked.iter().any(|b| host_part == *b || host_part.starts_with(&format!("{}/", b)));
-                if is_blocked {
-                    tracing::warn!("Blocked dangerous volume mount: {}", vol);
-                    return Err(anyhow::anyhow!("Volume mount not allowed: {}", host_part));
-                }
+                validate_volume_mount(vol).map_err(|e| {
+                    tracing::warn!("Blocked volume mount '{}': {}", vol, e);
+                    e
+                })?;
                 args.push("-v".to_string());
                 args.push(vol.clone());
             }
