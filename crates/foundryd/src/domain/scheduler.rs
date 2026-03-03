@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::str::FromStr;
 use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
 use cron::Schedule;
 use sqlx::PgPool;
 use tracing::{info, error, debug, warn};
@@ -29,7 +30,7 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
 
     let due_jobs = sqlx::query_as::<_, ScheduledJobRow>(
         r#"
-        SELECT id, repo_id, cron_expression, branch
+        SELECT id, repo_id, cron_expression, branch, COALESCE(timezone, 'UTC') as timezone
         FROM scheduled_job
         WHERE enabled = TRUE AND (next_run_at IS NULL OR next_run_at <= $1)
         "#,
@@ -52,7 +53,8 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
         }
 
         if let Ok(schedule) = Schedule::from_str(&scheduled.cron_expression) {
-            if let Some(next) = schedule.upcoming(Utc).next() {
+            let next = compute_next_run(&schedule, &scheduled.timezone);
+            if let Some(next) = next {
                 sqlx::query(
                     r#"
                     UPDATE scheduled_job
@@ -149,7 +151,13 @@ pub async fn upsert_schedule(
     let schedule = Schedule::from_str(cron_expression)
         .map_err(|e| anyhow::anyhow!("Invalid cron expression: {}", e))?;
 
-    let next_run: Option<DateTime<Utc>> = schedule.upcoming(Utc).next();
+    // Validate timezone if provided
+    let tz_str = timezone.unwrap_or("UTC");
+    if tz_str.parse::<Tz>().is_err() {
+        anyhow::bail!("Invalid timezone: {}", tz_str);
+    }
+
+    let next_run = compute_next_run(&schedule, tz_str);
 
     let row: (i64,) = sqlx::query_as(
         r#"
@@ -188,10 +196,30 @@ pub async fn delete_schedule(pool: &PgPool, repo_id: i64, branch: Option<&str>) 
     Ok(result.rows_affected() > 0)
 }
 
+/// Compute the next run time for a cron schedule, respecting the configured timezone.
+/// The cron expression is evaluated in the given timezone, then converted to UTC
+/// for storage in the database.
+fn compute_next_run(schedule: &Schedule, timezone_str: &str) -> Option<DateTime<Utc>> {
+    match timezone_str.parse::<Tz>() {
+        Ok(tz) => {
+            // Evaluate the cron in the user's timezone, then convert to UTC
+            schedule
+                .upcoming(tz)
+                .next()
+                .map(|dt| dt.with_timezone(&Utc))
+        }
+        Err(_) => {
+            warn!("Invalid timezone '{}', falling back to UTC", timezone_str);
+            schedule.upcoming(Utc).next()
+        }
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct ScheduledJobRow {
     id: i64,
     repo_id: i64,
     cron_expression: String,
     branch: Option<String>,
+    timezone: String,
 }
