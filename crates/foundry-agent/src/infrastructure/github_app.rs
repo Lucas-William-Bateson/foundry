@@ -3,13 +3,27 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::RwLock;
 
 pub struct GitHubApp {
     app_id: String,
     installation_id: String,
     private_key: EncodingKey,
     client: Client,
+    /// Cached installation token with its expiry (epoch seconds).
+    /// Installation tokens are valid for 1 hour; we refresh 5 minutes early.
+    token_cache: RwLock<Option<CachedToken>>,
 }
+
+struct CachedToken {
+    token: String,
+    /// Epoch seconds when this token expires.
+    expires_at: u64,
+}
+
+/// Refresh the token 5 minutes before it actually expires to avoid
+/// races where we hand out a token that's about to become invalid.
+const TOKEN_REFRESH_MARGIN_SECS: u64 = 300;
 
 #[derive(Serialize)]
 struct Claims {
@@ -121,6 +135,7 @@ impl GitHubApp {
             installation_id,
             private_key,
             client: Client::new(),
+            token_cache: RwLock::new(None),
         })
     }
 
@@ -141,6 +156,31 @@ impl GitHubApp {
     }
 
     pub async fn get_installation_token(&self) -> Result<String> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // Check cache with read lock first
+        {
+            let cache = self.token_cache.read().await;
+            if let Some(ref cached) = *cache {
+                if now < cached.expires_at.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
+                    return Ok(cached.token.clone());
+                }
+            }
+        }
+
+        // Cache miss or expired — fetch new token under write lock
+        let mut cache = self.token_cache.write().await;
+
+        // Double-check: another task may have refreshed while we waited for the write lock
+        if let Some(ref cached) = *cache {
+            if now < cached.expires_at.saturating_sub(TOKEN_REFRESH_MARGIN_SECS) {
+                return Ok(cached.token.clone());
+            }
+        }
+
         let jwt = self.generate_jwt()?;
 
         let url = format!(
@@ -161,6 +201,12 @@ impl GitHubApp {
             .json()
             .await
             .context("Failed to parse token response")?;
+
+        // GitHub installation tokens are valid for 1 hour (3600 seconds)
+        *cache = Some(CachedToken {
+            token: resp.token.clone(),
+            expires_at: now + 3600,
+        });
 
         Ok(resp.token)
     }
