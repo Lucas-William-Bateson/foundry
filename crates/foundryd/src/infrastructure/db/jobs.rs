@@ -393,7 +393,7 @@ pub async fn store_commits(pool: &PgPool, job_id: i64, event: &PushEvent) -> Res
     Ok(())
 }
 
-pub async fn claim_job(pool: &PgPool, agent_id: &str) -> Result<Option<ClaimedJob>> {
+pub async fn claim_job(pool: &PgPool, agent_id: &str, runner_id: Option<Uuid>) -> Result<Option<ClaimedJob>> {
     let claim_token = Uuid::new_v4();
 
     let row = sqlx::query(
@@ -403,7 +403,8 @@ pub async fn claim_job(pool: &PgPool, agent_id: &str) -> Result<Option<ClaimedJo
             SET status = 'running', 
                 started_at = now(), 
                 claimed_by = $1, 
-                claim_token = $2
+                claim_token = $2,
+                runner_id = $3
             WHERE id = (
                 SELECT id FROM job
                 WHERE status = 'queued'
@@ -429,6 +430,7 @@ pub async fn claim_job(pool: &PgPool, agent_id: &str) -> Result<Option<ClaimedJo
     )
     .bind(agent_id)
     .bind(claim_token)
+    .bind(runner_id)
     .fetch_optional(pool)
     .await?;
 

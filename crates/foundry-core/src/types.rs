@@ -32,6 +32,28 @@ pub struct ClaimedJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimRequest {
     pub agent_id: AgentId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub cpu: Option<i32>,
+    pub memory_mb: Option<i32>,
+    pub gpu: i32,
+    pub arch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    pub runner_id: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatRequest {
+    pub runner_id: uuid::Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

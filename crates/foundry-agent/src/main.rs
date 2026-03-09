@@ -50,8 +50,27 @@ async fn main() -> Result<()> {
 
     let client = ServerClient::new(&trusted_agent_config);
 
-    // Start the foundryd watchdog
+    match client.register(&trusted_agent_config).await {
+        Ok(runner_id) => {
+            info!("Registered as runner {} (id: {})", trusted_agent_config.effective_runner_name(), runner_id);
+        }
+        Err(e) => {
+            warn!("Failed to register runner: {} — continuing without runner_id", e);
+        }
+    }
+
     runtime::watchdog::start_foundryd_watchdog();
+
+    let heartbeat_client = client.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            if let Err(e) = heartbeat_client.heartbeat().await {
+                warn!("Heartbeat failed: {}", e);
+            }
+        }
+    });
 
     loop {
         match client.claim_job().await {

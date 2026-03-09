@@ -4,7 +4,7 @@ use tracing::debug;
 
 use foundry_core::{
     ApiResponse, ClaimRequest, ClaimResponse, ClaimedJob, FinishRequest, LogRequest,
-    SyncScheduleRequest, SyncTriggersRequest,
+    SyncScheduleRequest, SyncTriggersRequest, RegisterRequest, RegisterResponse, HeartbeatRequest,
 };
 
 use crate::types::config::Config;
@@ -15,6 +15,7 @@ pub struct ServerClient {
     server_url: String,
     agent_id: String,
     agent_secret: Option<String>,
+    runner_id: std::sync::Arc<tokio::sync::Mutex<Option<uuid::Uuid>>>,
 }
 
 impl ServerClient {
@@ -24,10 +25,10 @@ impl ServerClient {
             server_url: config.server_url.clone(),
             agent_id: config.agent_id.clone(),
             agent_secret: config.agent_secret.clone(),
+            runner_id: std::sync::Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
-    /// Add bearer token authentication if configured.
     fn auth(&self, req: RequestBuilder) -> RequestBuilder {
         if let Some(ref secret) = self.agent_secret {
             req.bearer_auth(secret)
@@ -38,8 +39,10 @@ impl ServerClient {
 
     pub async fn claim_job(&self) -> Result<Option<ClaimedJob>> {
         let url = format!("{}/agent/claim", self.server_url);
+        let runner_id = *self.runner_id.lock().await;
         let req = ClaimRequest {
             agent_id: self.agent_id.clone(),
+            runner_id,
         };
 
         let response = self
@@ -240,6 +243,53 @@ impl ServerClient {
 
         if !resp.ok {
             anyhow::bail!("Failed to sync triggers: {:?}", resp.error);
+        }
+
+        Ok(())
+    }
+
+    pub async fn register(&self, config: &Config) -> Result<uuid::Uuid> {
+        let url = format!("{}/agent/register", self.server_url);
+        let req = RegisterRequest {
+            name: config.effective_runner_name(),
+            tags: config.runner_tags.clone(),
+            cpu: config.runner_cpu,
+            memory_mb: config.runner_mem_mb,
+            gpu: config.runner_gpu,
+            arch: config.runner_arch.clone(),
+        };
+
+        let resp: RegisterResponse = self
+            .auth(self.client.post(&url).json(&req))
+            .send()
+            .await
+            .context("Failed to register with server")?
+            .json()
+            .await
+            .context("Failed to parse register response")?;
+
+        *self.runner_id.lock().await = Some(resp.runner_id);
+        Ok(resp.runner_id)
+    }
+
+    pub async fn heartbeat(&self) -> Result<()> {
+        let runner_id = *self.runner_id.lock().await;
+        let Some(runner_id) = runner_id else {
+            return Ok(());
+        };
+
+        let url = format!("{}/agent/heartbeat", self.server_url);
+        let req = HeartbeatRequest { runner_id };
+
+        let resp: ApiResponse = self
+            .auth(self.client.post(&url).json(&req))
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        if !resp.ok {
+            anyhow::bail!("Heartbeat rejected: {:?}", resp.error);
         }
 
         Ok(())
