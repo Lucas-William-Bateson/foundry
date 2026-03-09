@@ -1,0 +1,5 @@
+on push("main") {
+  stage test {
+    run "cargo test"
+  }
+}

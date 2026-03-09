@@ -1,0 +1,57 @@
+# Example Forgefile — a CI/CD pipeline definition for Foundry.
+#
+# This replaces the legacy foundry.toml format. Place a file named
+# `Forgefile` in your repository root.
+
+runner "default" {
+  image = "node:20-slim"
+}
+
+secrets from vault("myapp/prod") {
+  DB_URL
+  API_KEY as MY_API_KEY
+}
+
+on push("main", "develop"), pr("main") {
+  stage install on runner.default {
+    run "npm ci"
+    timeout 5m
+  }
+
+  stage lint on runner.default {
+    needs install
+    run "npm run lint"
+    allow_failure true
+  }
+
+  stage test on runner.default {
+    needs install
+    run "npm test"
+    timeout 10m
+  }
+
+  stage build on runner.default {
+    needs test
+    run "npm run build"
+    artifacts "dist/"
+  }
+
+  stage deploy on runner.default {
+    needs build
+    condition on_push
+    run "scripts/deploy.sh"
+    deploy {
+      name = "my-app"
+      domain = "myapp.l3s.me"
+      port = 3000
+      compose_file = "docker-compose.yml"
+    }
+  }
+}
+
+on schedule("0 0 * * *", tz: "UTC") {
+  stage nightly on runner.default {
+    run "npm run test:integration"
+    timeout 30m
+  }
+}

@@ -15,6 +15,7 @@ use secrecy::ExposeSecret;
 
 use crate::types::config::Config;
 use crate::domain::deploy::run_deploy;
+use crate::domain::forgefile_converter;
 use crate::infrastructure::docker::{build_image, run_container};
 use crate::infrastructure::github_app::GitHubApp;
 use crate::api::server::ServerClient;
@@ -104,10 +105,93 @@ pub async fn execute_pipeline(
 
     client.log(job, &format!("Clone complete ({} ms)", clone_duration_ms)).await?;
 
+    // --- Forgefile-first pipeline ---
+    let forgefile_path = repo_dir.join("Forgefile");
+    if forgefile_path.exists() {
+        let forgefile_source = tokio::fs::read_to_string(&forgefile_path)
+            .await
+            .context("Failed to read Forgefile")?;
+
+        client.log(job, "Found Forgefile").await?;
+
+        let forgefile = forgefile::parse(&forgefile_source).map_err(|errors| {
+            let msg = errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::anyhow!("Forgefile parse error: {}", msg)
+        })?;
+
+        if let Err(errors) = forgefile::validate(&forgefile) {
+            let msg = errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!("Forgefile validation failed: {}", msg);
+        }
+
+        let plan = forgefile_converter::convert(&forgefile, &job.git_ref);
+
+        // Fetch secrets from Vault if configured
+        let mut env_vars: std::collections::HashMap<String, String> = plan.env.clone();
+        for secret_cfg in &plan.secrets {
+            match fetch_forgefile_vault_secrets(client, job, trusted_agent_config, secret_cfg).await {
+                Ok(secrets) => {
+                    let alias_map = forgefile_converter::build_secret_alias_map(&[secret_cfg.clone()]);
+                    let count = secrets.len();
+                    for (key, value) in secrets {
+                        // Apply alias mapping: if alias exists, inject under alias name
+                        let env_key = alias_map
+                            .iter()
+                            .find(|(_, vault_key)| **vault_key == key)
+                            .map(|(env_name, _)| env_name.clone())
+                            .unwrap_or(key);
+                        env_vars.insert(env_key, value.expose_secret().to_string());
+                    }
+                    client.log(job, &format!("🔐 Injected {} secret(s) from Vault", count)).await?;
+                }
+                Err(e) => {
+                    client.log(job, &format!("⚠️  Vault secrets fetch failed: {}", e)).await?;
+                    warn!("Vault secrets fetch failed for job {}: {}", job.id, e);
+                }
+            }
+        }
+
+        // Sync trigger configuration
+        if let Err(e) = client.sync_triggers(job, &plan.triggers).await {
+            client.log(job, &format!("⚠️  Failed to sync triggers: {}", e)).await?;
+        } else {
+            client.log(job, &format!("🎯 Triggers synced: branches={:?}", plan.triggers.branches)).await?;
+        }
+
+        // Build FoundryConfig from the execution plan for compatibility with existing code
+        let untrusted_repo_config = FoundryConfig {
+            stages: plan.stages,
+            env: env_vars,
+            deploy: plan.deploy.unwrap_or_default(),
+            ..Default::default()
+        };
+
+        if untrusted_repo_config.deploy.is_enabled() {
+            return run_deploy(client, job, &repo_dir, trusted_agent_config, &untrusted_repo_config).await;
+        }
+
+        if untrusted_repo_config.has_stages() {
+            return run_stages(client, job, &repo_dir, trusted_agent_config, &untrusted_repo_config, clone_duration_ms).await;
+        }
+
+        // No stages and no deploy — nothing to do
+        client.log(job, "⚠️  Forgefile matched no stages for this event").await?;
+        return Ok(());
+    }
+
+    // --- Legacy foundry.toml fallback ---
     let mut untrusted_repo_config = FoundryConfig::load(&repo_dir);
 
     if let Some(ref mut untrusted_repo_config) = untrusted_repo_config {
-        client.log(job, "Found foundry.toml").await?;
+        client.log(job, "Found foundry.toml (legacy)").await?;
 
         // Fetch secrets from Vault if configured
         if let Some(ref secrets_cfg) = untrusted_repo_config.secrets {
@@ -322,6 +406,59 @@ async fn clone_repo(url: &str, safe_url: &str, sha_or_branch: &str, dest: &PathB
 
 fn sanitize_git_error(stderr: &str, secret_url: &str, safe_url: &str) -> String {
     stderr.replace(secret_url, safe_url)
+}
+
+/// Fetch secrets from Vault for a CI job using Forgefile secrets config.
+async fn fetch_forgefile_vault_secrets(
+    client: &ServerClient,
+    job: &ClaimedJob,
+    config: &Config,
+    secrets_cfg: &forgefile_converter::SecretsConfig,
+) -> Result<std::collections::HashMap<String, secrecy::SecretString>> {
+    let vault_addr = config
+        .vault_addr
+        .as_deref()
+        .context("VAULT_ADDR not configured on agent")?;
+    let role_id = config
+        .vault_role_id
+        .as_deref()
+        .context("VAULT_ROLE_ID not configured on agent")?;
+    let bootstrap_token = config
+        .vault_bootstrap_token
+        .as_ref()
+        .context("VAULT_BOOTSTRAP_TOKEN not configured — needed to generate per-job secret_ids")?;
+
+    let vault_client = VaultClient::new(vault_addr, role_id);
+
+    match vault_client.health_check().await {
+        Ok(true) => {}
+        Ok(false) => {
+            anyhow::bail!("Vault is not healthy (sealed or not initialised) — cannot fetch secrets");
+        }
+        Err(e) => {
+            anyhow::bail!("Vault unreachable: {} — cannot fetch secrets", e);
+        }
+    }
+
+    client
+        .log(job, &format!("🔑 Fetching secrets from Vault path: {}", secrets_cfg.vault_path))
+        .await?;
+
+    let mut secrets = vault_client
+        .fetch_ci_secrets(bootstrap_token, &secrets_cfg.vault_path)
+        .await?;
+
+    // Filter to requested keys if specified
+    if !secrets_cfg.keys.is_empty() {
+        let requested_keys: std::collections::HashSet<&str> = secrets_cfg
+            .keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        secrets.retain(|k, _| requested_keys.contains(k.as_str()));
+    }
+
+    Ok(secrets)
 }
 
 /// Fetch secrets from Vault for a CI job.

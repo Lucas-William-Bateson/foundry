@@ -1,0 +1,19 @@
+on push("main"), pr("main") {
+  stage lint {
+    run "cargo clippy -- -D warnings"
+    allow_failure
+  }
+
+  stage test {
+    needs lint
+    run "cargo test --workspace"
+    timeout 10m
+    retry 2
+  }
+
+  stage build {
+    needs test
+    run "cargo build --release"
+    artifacts "target/release/myapp"
+  }
+}

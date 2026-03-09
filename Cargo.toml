@@ -3,6 +3,7 @@ members = [
   "crates/foundry-core",
   "crates/foundryd",
   "crates/foundry-agent",
+  "crates/forgefile",
 ]
 resolver = "2"
 
