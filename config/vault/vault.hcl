@@ -19,5 +19,4 @@ api_addr = "http://127.0.0.1:8200"
 
 disable_mlock = true
 
-# UI disabled — all access is via API / AppRole
-ui = false
+ui = true
