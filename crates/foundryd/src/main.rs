@@ -43,6 +43,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    foundry_core::bootstrap_vault_secrets("foundry/prod").await?;
+
     let config = Config::from_env()?;
     info!("Starting foundryd on {}", config.bind_addr);
 

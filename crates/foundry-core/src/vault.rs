@@ -244,6 +244,46 @@ impl VaultClient {
     }
 }
 
+/// Fetch secrets from Vault and inject them as env vars.
+/// Requires VAULT_ADDR + VAULT_ROLE_ID + VAULT_BOOTSTRAP_TOKEN in the environment.
+/// If Vault is not configured, this is a no-op.
+pub async fn bootstrap_vault_secrets(vault_path: &str) -> anyhow::Result<()> {
+    let vault = match VaultClient::from_env()? {
+        Some(v) => v,
+        None => return Ok(()),
+    };
+
+    if !vault.health_check().await.unwrap_or(false) {
+        anyhow::bail!("Vault is not healthy — cannot bootstrap secrets");
+    }
+
+    let bootstrap_token = std::env::var("VAULT_BOOTSTRAP_TOKEN")
+        .ok()
+        .map(SecretString::from);
+
+    let bootstrap_token = match bootstrap_token {
+        Some(t) => t,
+        None => {
+            warn!("VAULT_BOOTSTRAP_TOKEN not set — skipping Vault secret bootstrap");
+            return Ok(());
+        }
+    };
+
+    info!("🔐 Bootstrapping secrets from Vault path: {}", vault_path);
+
+    let secrets = vault
+        .fetch_ci_secrets(&bootstrap_token, vault_path)
+        .await?;
+
+    let count = secrets.len();
+    for (key, value) in &secrets {
+        std::env::set_var(key, value.expose_secret());
+    }
+
+    info!("🔐 Injected {} secret(s) from Vault", count);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

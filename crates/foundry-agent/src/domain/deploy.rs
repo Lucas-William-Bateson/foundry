@@ -101,40 +101,6 @@ fn validate_deploy_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate an env_file path: must be under the allowed volume prefixes
-/// or relative to the repo directory.
-fn validate_env_file_path(env_file: &str, repo_dir: &PathBuf) -> Result<()> {
-    if env_file.is_empty() {
-        anyhow::bail!("Env file path cannot be empty");
-    }
-
-    // If it's a relative path, it must be within the repo directory (no ..)
-    if !env_file.starts_with('/') {
-        let normalized = lexical_clean(&format!("{}/{}", repo_dir.display(), env_file));
-        let repo_prefix = repo_dir.to_string_lossy();
-        if !normalized.starts_with(repo_prefix.as_ref()) {
-            anyhow::bail!("Env file path escapes repo directory: {}", env_file);
-        }
-        return Ok(());
-    }
-
-    // Absolute paths must be under the same allowlist as volumes
-    let normalized = lexical_clean(env_file);
-    let allowed = ALLOWED_VOLUME_PREFIXES
-        .iter()
-        .any(|prefix| normalized.starts_with(prefix));
-
-    if !allowed {
-        anyhow::bail!(
-            "Env file path not in allowlist: {}. Allowed prefixes: {:?}",
-            normalized,
-            ALLOWED_VOLUME_PREFIXES
-        );
-    }
-
-    Ok(())
-}
-
 pub(crate) async fn run_deploy(
     client: &ServerClient,
     job: &ClaimedJob,
@@ -162,19 +128,22 @@ pub(crate) async fn run_deploy(
             app_name.to_string(),
         ];
 
-        // Add env file if specified (validated against allowlist)
-        if let Some(env_file) = &untrusted_repo_config.deploy.env_file {
-            validate_env_file_path(env_file, repo_dir)?;
-            client.log(job, &format!("Using env file: {}", env_file)).await?;
-            args.push("--env-file".to_string());
-            args.push(env_file.clone());
-        }
-
         args.extend(["up", "-d", "--build", "--force-recreate"].iter().map(|s| s.to_string()));
 
-        let output = Command::new("docker")
-            .args(&args)
-            .current_dir(repo_dir)
+        // Pass env vars (including Vault secrets) directly to the docker compose
+        // process — no .env files written to disk. Compose inherits these for
+        // ${VAR} interpolation and services pick them up via `environment:`.
+        let mut cmd = Command::new("docker");
+        cmd.args(&args).current_dir(repo_dir);
+
+        if !untrusted_repo_config.env.is_empty() {
+            client.log(job, &format!("🔐 Injecting {} env var(s) into compose", untrusted_repo_config.env.len())).await?;
+            for (key, value) in &untrusted_repo_config.env {
+                cmd.env(key, value);
+            }
+        }
+
+        let output = cmd
             .output()
             .await
             .context("Failed to run docker compose")?;

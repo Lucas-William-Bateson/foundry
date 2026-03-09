@@ -58,15 +58,11 @@ services:
       FOUNDRY_BIND_ADDR: 0.0.0.0:8081
       FOUNDRY_ENABLE_TUNNEL: "false"
       VAULT_ADDR: http://vault:8200
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID}
+      VAULT_BOOTSTRAP_TOKEN: ${VAULT_BOOTSTRAP_TOKEN}
       CF_TUNNEL_NAME: mini_server
       CF_TUNNEL_DOMAIN: foundry.l3s.me
-      # Auth env vars are loaded from secrets.env:
-      # FOUNDRY_AUTH_ENABLED, FOUNDRY_AUTH_ISSUER_URL, FOUNDRY_AUTH_CLIENT_ID,
-      # FOUNDRY_AUTH_CLIENT_SECRET, FOUNDRY_AUTH_REDIRECT_URL, FOUNDRY_AUTH_COOKIE_SECRET,
-      # FOUNDRY_AUTH_ALLOWED_EMAILS
       DOCKER_HOST: unix:///var/run/docker.sock
-    env_file:
-      - secrets.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
@@ -97,13 +93,12 @@ services:
       FOUNDRY_AGENT_ID: docker-agent
       FOUNDRY_WORKSPACE_DIR: /workspace
       VAULT_ADDR: http://vault:8200
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID}
+      VAULT_BOOTSTRAP_TOKEN: ${VAULT_BOOTSTRAP_TOKEN}
       FOUNDRY_SELF_REPO: Lucas-William-Bateson/foundry
       FOUNDRY_SELF_DEPLOY_SCRIPT: /app/scripts/deploy.sh
       GITHUB_APP_PRIVATE_KEY_PATH: /secrets/github-app.pem
-      HOST_PRIVATE_KEY_PATH: ${GITHUB_APP_PRIVATE_KEY_FILE:-}
       DOCKER_HOST: unix:///var/run/docker.sock
-    env_file:
-      - secrets.env
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${FOUNDRY_WORKSPACE:-./workspace}:/workspace

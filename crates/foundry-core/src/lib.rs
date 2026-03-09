@@ -9,3 +9,4 @@ pub use config::{FoundryConfig, FailurePolicy, StageConfig, StageCondition, Sche
 pub use github::{verify_github_signature, TriggerType};
 pub use types::*;
 pub use vault::VaultClient;
+pub use vault::bootstrap_vault_secrets;

@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    foundry_core::bootstrap_vault_secrets("foundry/agent").await?;
+
     let trusted_agent_config = Config::from_env()?;
     info!("Starting foundry-agent: {}", trusted_agent_config.agent_id);
     info!("Server URL: {}", trusted_agent_config.server_url);

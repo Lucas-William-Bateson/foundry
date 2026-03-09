@@ -20,6 +20,7 @@ tower = "0.5"
 
 serde.workspace = true
 serde_json.workspace = true
+secrecy.workspace = true
 
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
 
