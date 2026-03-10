@@ -18,23 +18,44 @@ services:
         ]
       interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 30
+      start_period: 30s
     ports:
       - "127.0.0.1:8200:8200"
     restart: unless-stopped
 
   vault-unseal:
-    image: python:3.12-alpine
+    image: hashicorp/vault:1.17
     depends_on:
       vault:
         condition: service_started
     volumes:
       - ./config/vault/init.json:/vault/keys/init.json:ro
-      - ./scripts/vault-auto-unseal.sh:/unseal.sh:ro
     environment:
       VAULT_ADDR: "http://vault:8200"
-    entrypoint: ["sh", "/unseal.sh"]
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "[auto-unseal] Waiting for Vault..."
+        sleep 3
+        attempts=0
+        until vault status -format=json 2>/dev/null; do
+          attempts=$$((attempts + 1))
+          if [ $$attempts -ge 30 ]; then
+            echo "[auto-unseal] Vault not reachable after 30 attempts"
+            exit 1
+          fi
+          sleep 2
+        done
+        if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
+          UNSEAL_KEY=$$(cat /vault/keys/init.json | sed -n 's/.*"unseal_keys_b64":\["\([^"]*\)".*/\1/p')
+          echo "[auto-unseal] Unsealing Vault..."
+          vault operator unseal "$$UNSEAL_KEY"
+          echo "[auto-unseal] ✓ Done"
+        else
+          echo "[auto-unseal] Vault already unsealed"
+        fi
     restart: "no"
 
   postgres:
