@@ -4,7 +4,7 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use foundry_core::{ClaimedJob, github::{PushEvent, TriggerType}};
+use foundry_core::{ClaimedJob, RunnerRequirements, github::{PushEvent, TriggerType}};
 
 /// Comprehensive push event data for storage
 #[derive(Debug)]
@@ -393,27 +393,69 @@ pub async fn store_commits(pool: &PgPool, job_id: i64, event: &PushEvent) -> Res
     Ok(())
 }
 
-pub async fn claim_job(pool: &PgPool, agent_id: &str) -> Result<Option<ClaimedJob>> {
+pub async fn claim_job(pool: &PgPool, agent_id: &str, runner_id: Option<Uuid>) -> Result<Option<ClaimedJob>> {
     let claim_token = Uuid::new_v4();
 
     let row = sqlx::query(
         r#"
-        WITH claimed AS (
+        WITH runner_info AS (
+            SELECT name, tags, cpu, memory_mb, gpu, arch
+            FROM runner
+            WHERE id = $3
+        ),
+        candidate AS (
+            SELECT j.id
+            FROM job j
+            LEFT JOIN runner_info ri ON true
+            WHERE j.status = 'queued'
+              AND (
+                -- No requirements: any runner can claim
+                j.runner_requirements IS NULL
+                OR (
+                  -- runner_name match (if specified)
+                  (j.runner_requirements->>'runner_name' IS NULL
+                   OR j.runner_requirements->>'runner_name' = ri.name)
+                  -- required_tags: all must be present in runner's tags
+                  AND (
+                    NOT jsonb_exists(j.runner_requirements, 'required_tags')
+                    OR j.runner_requirements->'required_tags' = '[]'::jsonb
+                    OR (
+                      ri.tags IS NOT NULL
+                      AND (
+                        SELECT bool_and(ri.tags @> ARRAY[elem::text])
+                        FROM jsonb_array_elements_text(j.runner_requirements->'required_tags') AS elem
+                      )
+                    )
+                  )
+                  -- min_cpu
+                  AND (j.runner_requirements->>'min_cpu' IS NULL
+                       OR COALESCE(ri.cpu, 0) >= (j.runner_requirements->>'min_cpu')::int)
+                  -- min_memory_mb
+                  AND (j.runner_requirements->>'min_memory_mb' IS NULL
+                       OR COALESCE(ri.memory_mb, 0) >= (j.runner_requirements->>'min_memory_mb')::int)
+                  -- min_gpu
+                  AND (j.runner_requirements->>'min_gpu' IS NULL
+                       OR COALESCE(ri.gpu, 0) >= (j.runner_requirements->>'min_gpu')::int)
+                  -- arch
+                  AND (j.runner_requirements->>'arch' IS NULL
+                       OR j.runner_requirements->>'arch' = ri.arch)
+                )
+              )
+            ORDER BY j.created_at ASC
+            FOR UPDATE OF j SKIP LOCKED
+            LIMIT 1
+        ),
+        claimed AS (
             UPDATE job
-            SET status = 'running', 
-                started_at = now(), 
-                claimed_by = $1, 
-                claim_token = $2
-            WHERE id = (
-                SELECT id FROM job
-                WHERE status = 'queued'
-                ORDER BY created_at ASC
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
+            SET status = 'running',
+                started_at = now(),
+                claimed_by = $1,
+                claim_token = $2,
+                runner_id = $3
+            WHERE id = (SELECT id FROM candidate)
             RETURNING id, repo_id, git_sha, git_ref, claim_token
         )
-        SELECT 
+        SELECT
             c.id,
             c.repo_id,
             c.git_sha,
@@ -429,6 +471,7 @@ pub async fn claim_job(pool: &PgPool, agent_id: &str) -> Result<Option<ClaimedJo
     )
     .bind(agent_id)
     .bind(claim_token)
+    .bind(runner_id)
     .fetch_optional(pool)
     .await?;
 
@@ -644,4 +687,26 @@ pub async fn get_repo_jobs(pool: &PgPool, repo_id: i64, limit: i64) -> Result<Ve
             trigger_type: r.get("trigger_type"),
         })
         .collect())
+}
+
+/// Set runner requirements on a queued job.
+pub async fn set_job_runner_requirements(
+    pool: &PgPool,
+    job_id: i64,
+    requirements: &RunnerRequirements,
+) -> Result<()> {
+    let json = serde_json::to_value(requirements)?;
+    sqlx::query(
+        r#"
+        UPDATE job
+        SET runner_requirements = $2
+        WHERE id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(json)
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }

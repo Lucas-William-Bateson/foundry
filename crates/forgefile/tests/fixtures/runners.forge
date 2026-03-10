@@ -1,0 +1,22 @@
+runner "fast" {
+  tags = ["ssd", "x86"]
+  cpu = 4
+  mem = "8G"
+  image = "rust:1.87-slim"
+}
+
+runner "gpu-box" {
+  tags = ["nvidia", "cuda"]
+  gpu = 1
+  image = "nvidia/cuda:12.6-devel"
+}
+
+on push("main") {
+  stage train on runner.gpu-box {
+    run "python train.py"
+  }
+
+  stage test on runner.fast {
+    run "cargo test"
+  }
+}

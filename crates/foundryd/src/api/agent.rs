@@ -9,7 +9,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
-use foundry_core::{ApiResponse, ClaimRequest, ClaimResponse, FinishRequest, LogRequest, SyncScheduleRequest, SyncTriggersRequest};
+use foundry_core::{ApiResponse, ClaimRequest, ClaimResponse, FinishRequest, LogRequest, SyncScheduleRequest, SyncTriggersRequest, RegisterRequest, RegisterResponse, HeartbeatRequest};
 
 use crate::{infrastructure::db, domain::scheduler, AppState};
 
@@ -22,6 +22,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/agent/metrics", post(report_metrics))
         .route("/agent/schedule", post(sync_schedule))
         .route("/agent/triggers", post(sync_triggers))
+        .route("/agent/register", post(register_agent))
+        .route("/agent/heartbeat", post(heartbeat))
 }
 
 /// Middleware that validates the agent bearer token against FOUNDRY_AGENT_SECRET.
@@ -67,7 +69,7 @@ async fn claim_job(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ClaimRequest>,
 ) -> impl IntoResponse {
-    match db::claim_job(&state.db, &req.agent_id).await {
+    match db::claim_job(&state.db, &req.agent_id, req.runner_id).await {
         Ok(Some(job)) => {
             info!("Agent {} claimed job {}", req.agent_id, job.id);
             (StatusCode::OK, Json(ClaimResponse::Claimed { job }))
@@ -260,6 +262,55 @@ async fn sync_triggers(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::error(&format!("Failed to sync triggers: {}", e))),
+            )
+        }
+    }
+}
+
+async fn register_agent(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RegisterRequest>,
+) -> impl IntoResponse {
+    match db::register_runner(
+        &state.db,
+        &req.name,
+        &req.tags,
+        req.cpu,
+        req.memory_mb,
+        req.gpu,
+        &req.arch,
+    )
+    .await
+    {
+        Ok(runner_id) => {
+            info!("Runner '{}' registered with id {}", req.name, runner_id);
+            (StatusCode::OK, Json(serde_json::json!(RegisterResponse { runner_id })))
+        }
+        Err(e) => {
+            error!("Failed to register runner: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!(ApiResponse::error(&format!("Failed to register: {}", e)))),
+            )
+        }
+    }
+}
+
+async fn heartbeat(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<HeartbeatRequest>,
+) -> impl IntoResponse {
+    match db::heartbeat_runner(&state.db, req.runner_id).await {
+        Ok(true) => (StatusCode::OK, Json(ApiResponse::ok())),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::error("Unknown runner")),
+        ),
+        Err(e) => {
+            error!("Failed to update heartbeat: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error("Database error")),
             )
         }
     }

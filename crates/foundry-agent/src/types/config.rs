@@ -14,15 +14,16 @@ pub struct Config {
     pub github_private_key: Option<String>,
     pub self_repo: Option<String>,
     pub self_deploy_script: Option<String>,
-    /// Vault AppRole role_id (non-secret, stored in CI config)
     pub vault_role_id: Option<String>,
-    /// Vault bootstrap token for generating per-job secret_ids.
-    /// Wrapped in SecretString to prevent accidental logging.
     pub vault_bootstrap_token: Option<SecretString>,
-    /// Vault address (e.g. http://vault:8200)
     pub vault_addr: Option<String>,
-    /// Shared secret for authenticating with the server
     pub agent_secret: Option<String>,
+    pub runner_name: Option<String>,
+    pub runner_tags: Vec<String>,
+    pub runner_cpu: Option<i32>,
+    pub runner_mem_mb: Option<i32>,
+    pub runner_gpu: i32,
+    pub runner_arch: String,
 }
 
 impl Config {
@@ -62,6 +63,23 @@ impl Config {
             vault_role_id: std::env::var("VAULT_ROLE_ID").ok(),
             vault_bootstrap_token: Self::load_vault_bootstrap_token(),
             agent_secret: std::env::var("FOUNDRY_AGENT_SECRET").ok(),
+            runner_name: std::env::var("FOUNDRY_RUNNER_NAME").ok(),
+            runner_tags: std::env::var("FOUNDRY_RUNNER_TAGS")
+                .ok()
+                .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default(),
+            runner_cpu: std::env::var("FOUNDRY_RUNNER_CPU")
+                .ok()
+                .and_then(|v| v.parse().ok()),
+            runner_mem_mb: std::env::var("FOUNDRY_RUNNER_MEM")
+                .ok()
+                .and_then(|v| Self::parse_memory(&v)),
+            runner_gpu: std::env::var("FOUNDRY_RUNNER_GPU")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            runner_arch: std::env::var("FOUNDRY_RUNNER_ARCH")
+                .unwrap_or_else(|_| std::env::consts::ARCH.to_string()),
         })
     }
 
@@ -75,17 +93,35 @@ impl Config {
         self.vault_addr.is_some() && self.vault_role_id.is_some()
     }
 
-    /// Load the Vault bootstrap token from env var or file.
-    /// The bootstrap token is used to generate per-job secret_ids.
-    /// Immediately wrapped in SecretString; the raw env var is removed.
+    fn parse_memory(s: &str) -> Option<i32> {
+        let s = s.trim();
+        if s.is_empty() {
+            return None;
+        }
+        let (num_str, multiplier) = if let Some(n) = s.strip_suffix('G').or_else(|| s.strip_suffix('g')) {
+            (n, 1024)
+        } else if let Some(n) = s.strip_suffix('M').or_else(|| s.strip_suffix('m')) {
+            (n, 1)
+        } else if let Some(n) = s.strip_suffix('T').or_else(|| s.strip_suffix('t')) {
+            (n, 1024 * 1024)
+        } else {
+            (s, 1)
+        };
+        num_str.trim().parse::<i32>().ok().map(|n| n * multiplier)
+    }
+
+    pub fn effective_runner_name(&self) -> String {
+        self.runner_name
+            .clone()
+            .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
+            .unwrap_or_else(|| self.agent_id.clone())
+    }
+
     fn load_vault_bootstrap_token() -> Option<SecretString> {
-        // Try env var first
         if let Ok(token) = std::env::var("VAULT_BOOTSTRAP_TOKEN") {
-            // Remove from process env — only our SecretString copy should exist
             std::env::remove_var("VAULT_BOOTSTRAP_TOKEN");
             return Some(SecretString::from(token));
         }
-        // Try file (600 perms on host)
         if let Ok(path) = std::env::var("VAULT_BOOTSTRAP_TOKEN_FILE") {
             if let Ok(token) = std::fs::read_to_string(&path) {
                 let token = token.trim().to_string();

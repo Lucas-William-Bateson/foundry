@@ -1,0 +1,59 @@
+runner "default" {
+  tags = ["x86"]
+  cpu = 2
+  mem = "4G"
+  image = "rust:1.87-slim"
+}
+
+secrets from vault("foundry/prod") {
+  DATABASE_URL
+  API_KEY as FOUNDRY_API_KEY
+}
+
+service postgres {
+  image = "postgres:17"
+  env POSTGRES_DB = "test"
+  health "pg_isready"
+  expose 5432
+}
+
+on push("main", "release/*"), pr("main") {
+  stage lint on runner.default {
+    run "cargo clippy -- -D warnings"
+    allow_failure
+  }
+
+  stage test on runner.default {
+    needs lint
+    services [postgres]
+    env DATABASE_URL = "postgres://localhost:5432/test"
+    run "cargo test --workspace"
+    timeout 15m
+    retry 1
+    artifacts "target/test-results/**"
+  }
+
+  stage build on runner.default {
+    needs test
+    run "cargo build --release"
+    artifacts "target/release/foundry*"
+  }
+
+  stage release on runner.default {
+    needs build
+    condition on_push
+    run "scripts/deploy.sh"
+    deploy {
+      name = "foundry"
+      domain = "foundry.l3s.me"
+      port = 8081
+      compose_file = "docker-compose.yml"
+    }
+  }
+}
+
+on schedule("0 3 * * *", tz: "Europe/Berlin") {
+  stage nightly on runner.default {
+    run "cargo bench"
+  }
+}

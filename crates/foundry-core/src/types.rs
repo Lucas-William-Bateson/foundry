@@ -7,6 +7,30 @@ pub type ClaimToken = Uuid;
 pub type AgentId = String;
 pub type StageId = String;
 
+/// Runner requirements stored as JSONB on jobs.
+/// Describes what capabilities a runner must have to execute a job.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RunnerRequirements {
+    /// Named runner reference (e.g., "fast" from `runner.fast`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner_name: Option<String>,
+    /// Required tags (all must match)
+    #[serde(default)]
+    pub required_tags: Vec<String>,
+    /// Minimum CPU cores
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_cpu: Option<u32>,
+    /// Minimum memory in MB
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_memory_mb: Option<u32>,
+    /// Minimum GPUs
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_gpu: Option<u32>,
+    /// Required architecture
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
@@ -32,6 +56,28 @@ pub struct ClaimedJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimRequest {
     pub agent_id: AgentId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner_id: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub name: String,
+    pub tags: Vec<String>,
+    pub cpu: Option<i32>,
+    pub memory_mb: Option<i32>,
+    pub gpu: i32,
+    pub arch: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegisterResponse {
+    pub runner_id: uuid::Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatRequest {
+    pub runner_id: uuid::Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

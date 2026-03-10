@@ -1,0 +1,11 @@
+[package]
+name = "forgefile"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+logos = "0.15"
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"

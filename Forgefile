@@ -1,0 +1,34 @@
+runner "default" {
+  image = "rust:1.87-slim"
+}
+
+secrets from vault("foundry/prod") {
+  DATABASE_URL
+  GITHUB_WEBHOOK_SECRET
+}
+
+on push("main"), pr("main") {
+  stage test on runner.default {
+    run "cargo test --workspace"
+    timeout 30m
+  }
+
+  stage build on runner.default {
+    needs test
+    run "cargo build --release"
+    artifacts "target/release/foundryd"
+    artifacts "target/release/foundry-agent"
+  }
+
+  stage deploy on runner.default {
+    needs build
+    condition on_push
+    run "scripts/deploy.sh"
+    deploy {
+      name = "foundry"
+      domain = "foundry.l3s.me"
+      port = 8081
+      compose_file = "docker-compose.yml"
+    }
+  }
+}
