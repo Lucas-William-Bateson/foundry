@@ -8,6 +8,16 @@ PROJECT_NAME="foundry"
 echo "=== Foundry Self-Deploy ==="
 echo "Timestamp: $(date)"
 
+# Back up before deploying — protects against data loss during upgrades
+echo "Running pre-deploy backup..."
+if [ -x "$PROJECT_DIR/scripts/backup.sh" ] || [ -x "/app/scripts/backup.sh" ]; then
+  bash "${PROJECT_DIR}/scripts/backup.sh" --quiet 2>/dev/null \
+    || bash /app/scripts/backup.sh --quiet 2>/dev/null \
+    || echo "Warning: backup failed, continuing deploy anyway"
+else
+  echo "Warning: backup.sh not found, skipping pre-deploy backup"
+fi
+
 CLONE_URL="$REPO_URL"
 if [ -n "${GITHUB_TOKEN:-}" ]; then
     CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${FOUNDRY_REPO:-Lucas-William-Bateson/foundry}.git"

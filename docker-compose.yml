@@ -14,7 +14,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "vault status -address=http://127.0.0.1:8200 2>&1 || true",
+          "vault status -address=http://127.0.0.1:8200 -format=json 2>/dev/null | grep -q '\"sealed\":false' || exit 1",
         ]
       interval: 5s
       timeout: 5s
@@ -23,6 +23,19 @@ services:
     ports:
       - "127.0.0.1:8200:8200"
     restart: unless-stopped
+
+  vault-unseal:
+    image: python:3.12-alpine
+    depends_on:
+      vault:
+        condition: service_started
+    volumes:
+      - ./config/vault/init.json:/vault/keys/init.json:ro
+      - ./scripts/vault-auto-unseal.sh:/unseal.sh:ro
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    entrypoint: ["sh", "/unseal.sh"]
+    restart: "no"
 
   postgres:
     image: postgres:16-alpine
