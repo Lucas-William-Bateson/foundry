@@ -21,7 +21,7 @@ on push("main", "develop"), pr("main") {
   stage lint on runner.default {
     needs install
     run "npm run lint"
-    allow_failure true
+    allow_failure
   }
 
   stage test on runner.default {

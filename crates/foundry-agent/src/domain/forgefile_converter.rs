@@ -206,16 +206,15 @@ fn trigger_block_matches(block: &TriggerBlock, event_ref: &str, is_pr: bool) -> 
             }
             Trigger::Pr(patterns) => {
                 if is_pr {
-                    // For PRs, we match if any pattern matches. Since we don't
-                    // have the target branch in the ref, accept all PR triggers.
-                    if patterns.is_empty() || !patterns.is_empty() {
-                        return true;
-                    }
+                    // PR target branch matching requires data not available in git ref.
+                    // Accept all PR triggers for now; server-side filtering handles target branches.
+                    let _ = patterns;
+                    return true;
                 }
             }
             Trigger::Schedule { .. } => {
-                // Schedule triggers are handled server-side via cron
-                return true;
+                // Schedule triggers are handled server-side via cron.
+                // Return false here so schedule-only blocks don't run on push/PR events.
             }
             Trigger::Failure => {
                 // Failure triggers are evaluated after stage execution
@@ -370,7 +369,11 @@ fn parse_memory_mb(mem_str: &str) -> Option<u32> {
     let s = mem_str.trim().to_lowercase();
     if let Some(n) = s.strip_suffix("gb") {
         n.trim().parse::<u32>().ok().map(|v| v * 1024)
+    } else if let Some(n) = s.strip_suffix("g") {
+        n.trim().parse::<u32>().ok().map(|v| v * 1024)
     } else if let Some(n) = s.strip_suffix("mb") {
+        n.trim().parse::<u32>().ok()
+    } else if let Some(n) = s.strip_suffix("m") {
         n.trim().parse::<u32>().ok()
     } else {
         s.parse::<u32>().ok()
@@ -632,5 +635,9 @@ mod tests {
         assert_eq!(parse_memory_mb("4GB"), Some(4096));
         assert_eq!(parse_memory_mb("512MB"), Some(512));
         assert_eq!(parse_memory_mb("1024"), Some(1024));
+        assert_eq!(parse_memory_mb("8G"), Some(8192));
+        assert_eq!(parse_memory_mb("4g"), Some(4096));
+        assert_eq!(parse_memory_mb("256M"), Some(256));
+        assert_eq!(parse_memory_mb("128m"), Some(128));
     }
 }

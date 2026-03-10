@@ -259,14 +259,33 @@ impl ServerClient {
             arch: config.runner_arch.clone(),
         };
 
-        let resp: RegisterResponse = self
+        let response = self
             .auth(self.client.post(&url).json(&req))
             .send()
             .await
-            .context("Failed to register with server")?
-            .json()
+            .context("Failed to register with server")?;
+
+        let status = response.status();
+        let body = response
+            .text()
             .await
-            .context("Failed to parse register response")?;
+            .context("Failed to read register response body")?;
+
+        if !status.is_success() {
+            let error_msg = serde_json::from_str::<ApiResponse>(&body)
+                .ok()
+                .and_then(|r| r.error)
+                .unwrap_or_else(|| body[..body.len().min(500)].to_string());
+            anyhow::bail!("Registration failed (HTTP {}): {}", status, error_msg);
+        }
+
+        let resp: RegisterResponse = serde_json::from_str(&body).with_context(|| {
+            format!(
+                "Failed to parse register response (HTTP {}): {}",
+                status,
+                &body[..body.len().min(500)]
+            )
+        })?;
 
         *self.runner_id.lock().await = Some(resp.runner_id);
         Ok(resp.runner_id)
