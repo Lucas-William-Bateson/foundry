@@ -37,10 +37,14 @@ services:
       - sh
       - -c
       - |
-        echo "[auto-unseal] Waiting for Vault..."
-        sleep 3
+        echo "[auto-unseal] Waiting for Vault to be reachable..."
+        sleep 2
         attempts=0
-        until vault status -format=json 2>/dev/null; do
+        while true; do
+          # vault status exits 0=unsealed, 1=error, 2=sealed — all mean reachable
+          vault status >/dev/null 2>&1
+          rc=$$?
+          [ $$rc -eq 0 ] || [ $$rc -eq 2 ] && break
           attempts=$$((attempts + 1))
           if [ $$attempts -ge 30 ]; then
             echo "[auto-unseal] Vault not reachable after 30 attempts"
@@ -48,11 +52,12 @@ services:
           fi
           sleep 2
         done
+        echo "[auto-unseal] Vault is reachable"
         if vault status -format=json 2>/dev/null | grep -q '"sealed":true'; then
           UNSEAL_KEY=$$(cat /vault/keys/init.json | sed -n 's/.*"unseal_keys_b64":\["\([^"]*\)".*/\1/p')
-          echo "[auto-unseal] Unsealing Vault..."
+          echo "[auto-unseal] Unsealing..."
           vault operator unseal "$$UNSEAL_KEY"
-          echo "[auto-unseal] ✓ Done"
+          echo "[auto-unseal] ✓ Vault unsealed"
         else
           echo "[auto-unseal] Vault already unsealed"
         fi
