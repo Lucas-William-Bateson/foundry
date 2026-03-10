@@ -91,7 +91,7 @@ services:
     environment:
       FOUNDRY_SERVER_URL: http://foundryd:8081
       FOUNDRY_AGENT_ID: docker-agent
-      FOUNDRY_WORKSPACE_DIR: /workspace
+      FOUNDRY_WORKSPACE_DIR: /Users/lucas/workspace
       VAULT_ADDR: http://vault:8200
       VAULT_ROLE_ID: ${VAULT_ROLE_ID}
       VAULT_BOOTSTRAP_TOKEN: ${VAULT_BOOTSTRAP_TOKEN}
@@ -101,7 +101,7 @@ services:
       DOCKER_HOST: unix:///var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${FOUNDRY_WORKSPACE:-./workspace}:/workspace
+      - /Users/lucas/workspace:/Users/lucas/workspace
       - .:/app
       - ${GITHUB_APP_PRIVATE_KEY_FILE:-/dev/null}:/secrets/github-app.pem:ro
     working_dir: /app
