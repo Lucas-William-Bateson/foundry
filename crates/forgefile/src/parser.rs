@@ -85,12 +85,12 @@ impl Parser {
     }
 
     fn expect_ident(&mut self) -> Result<String, ForgeError> {
-        match self.peek() {
-            Some(Token::Ident(_)) => match self.advance().unwrap().0 {
-                Token::Ident(s) => Ok(s),
-                _ => unreachable!(),
-            },
-            _ => Err(ForgeError::ParseError {
+        match self.peek().and_then(|t| t.as_ident()) {
+            Some(name) => {
+                self.advance();
+                Ok(name)
+            }
+            None => Err(ForgeError::ParseError {
                 line: self.current_line(),
                 message: format!("expected identifier, found {:?}", self.peek()),
             }),

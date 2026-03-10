@@ -100,24 +100,31 @@ fn test_repo_forgefile_parses() {
     let source = fs::read_to_string(&forgefile_path)
         .unwrap_or_else(|e| panic!("failed to read {forgefile_path}: {e}"));
 
-    // The repo Forgefile may use keywords (e.g. "deploy") as identifiers which
-    // the parser currently rejects.  If parsing succeeds we validate; otherwise
-    // we just assert the source is non-empty (the file exists and was read).
-    match parse(&source) {
-        Ok(ast) => {
-            validate(&ast).expect("repo Forgefile should validate without errors");
-            assert!(!ast.triggers.is_empty(), "should have at least one trigger block");
-            assert!(
-                ast.triggers[0].items.len() >= 2,
-                "should have multiple stages"
-            );
-        }
-        Err(_) => {
-            // Known limitation: stage names that clash with keywords are not
-            // yet supported.  Just confirm the file was read.
-            assert!(!source.is_empty(), "Forgefile should not be empty");
-        }
-    }
+    let ast = parse(&source).expect("repo Forgefile should parse successfully");
+    validate(&ast).expect("repo Forgefile should validate without errors");
+    assert!(!ast.triggers.is_empty(), "should have at least one trigger block");
+    assert!(
+        ast.triggers[0].items.len() >= 2,
+        "should have multiple stages"
+    );
+}
+
+#[test]
+fn test_keyword_as_stage_name() {
+    let input = r#"
+on push("main") {
+  stage deploy {
+    run "echo hi"
+  }
+}
+"#;
+
+    let ast = parse(input).expect("should parse keyword 'deploy' as stage name");
+    validate(&ast).expect("should validate");
+
+    let block = &ast.triggers[0];
+    let deploy = get_stage(block, "deploy");
+    assert_eq!(deploy.commands[0], Expr::Literal("echo hi".into()));
 }
 
 // =========================================================================

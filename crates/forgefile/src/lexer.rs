@@ -169,6 +169,63 @@ pub struct LexError {
     pub message: String,
 }
 
+impl Token {
+    /// Returns the string representation if this token can be used as an identifier.
+    /// Keywords are valid identifiers in name positions (stage names, service names, etc.).
+    pub fn as_ident(&self) -> Option<String> {
+        match self {
+            Token::Ident(s) => Some(s.clone()),
+            Token::Runner => Some("runner".into()),
+            Token::Stage => Some("stage".into()),
+            Token::On => Some("on".into()),
+            Token::Push => Some("push".into()),
+            Token::Pr => Some("pr".into()),
+            Token::Schedule => Some("schedule".into()),
+            Token::Needs => Some("needs".into()),
+            Token::Run => Some("run".into()),
+            Token::Env => Some("env".into()),
+            Token::Secrets => Some("secrets".into()),
+            Token::From => Some("from".into()),
+            Token::Vault => Some("vault".into()),
+            Token::Service => Some("service".into()),
+            Token::Services => Some("services".into()),
+            Token::Matrix => Some("matrix".into()),
+            Token::Deploy => Some("deploy".into()),
+            Token::Artifacts => Some("artifacts".into()),
+            Token::Output => Some("output".into()),
+            Token::Condition => Some("condition".into()),
+            Token::AllowFailure => Some("allow_failure".into()),
+            Token::Retry => Some("retry".into()),
+            Token::Timeout => Some("timeout".into()),
+            Token::Image => Some("image".into()),
+            Token::Tags => Some("tags".into()),
+            Token::Cpu => Some("cpu".into()),
+            Token::Mem => Some("mem".into()),
+            Token::Gpu => Some("gpu".into()),
+            Token::Arch => Some("arch".into()),
+            Token::Health => Some("health".into()),
+            Token::Expose => Some("expose".into()),
+            Token::As => Some("as".into()),
+            Token::Let => Some("let".into()),
+            Token::Fn => Some("fn".into()),
+            Token::Use => Some("use".into()),
+            Token::Auto => Some("auto".into()),
+            Token::Tz => Some("tz".into()),
+            Token::Name => Some("name".into()),
+            Token::Domain => Some("domain".into()),
+            Token::Port => Some("port".into()),
+            Token::ComposeFile => Some("compose_file".into()),
+            Token::Always => Some("always".into()),
+            Token::OnSuccess => Some("on_success".into()),
+            Token::OnFailure => Some("on_failure".into()),
+            Token::OnPush => Some("on_push".into()),
+            Token::OnPr => Some("on_pr".into()),
+            // Punctuation, literals, and booleans cannot be identifiers
+            _ => None,
+        }
+    }
+}
+
 pub fn tokenize(input: &str) -> Result<Vec<(Token, Range<usize>)>, LexError> {
     let lexer = Token::lexer(input);
     let mut tokens = Vec::new();
