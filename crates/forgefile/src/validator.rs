@@ -89,8 +89,8 @@ fn validate_stage(
     service_names: &HashSet<&str>,
     errors: &mut Vec<ForgeError>,
 ) {
-    // Rule 6: stages must have at least one run command
-    if stage.commands.is_empty() {
+    // Rule 6: stages must have at least one run command OR a deploy block
+    if stage.commands.is_empty() && stage.deploy.is_none() {
         errors.push(ForgeError::ValidationError(format!(
             "stage '{}' has no run commands",
             stage.name
@@ -381,6 +381,20 @@ mod tests {
         let ff = minimal_forgefile(vec![PipelineItem::Stage(stage)]);
         let errs = validate(&ff).unwrap_err();
         assert!(errs.iter().any(|e| format!("{e}").contains("no run commands")));
+    }
+
+    #[test]
+    fn stage_with_deploy_block_no_run_passes() {
+        let mut stage = empty_stage("release");
+        stage.commands.clear();
+        stage.deploy = Some(crate::ast::DeployDef {
+            name: "my-app".into(),
+            domain: None,
+            port: None,
+            compose_file: None,
+        });
+        let ff = minimal_forgefile(vec![PipelineItem::Stage(stage)]);
+        assert!(validate(&ff).is_ok());
     }
 
     #[test]
