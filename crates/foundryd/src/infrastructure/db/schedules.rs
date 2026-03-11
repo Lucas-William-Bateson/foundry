@@ -1,7 +1,7 @@
 //! Scheduled job queries — list, toggle, create/delete scheduled jobs.
 
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::{SqlitePool, Row};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScheduleSummary {
@@ -17,7 +17,7 @@ pub struct ScheduleSummary {
     pub next_run_at: Option<String>,
 }
 
-pub async fn list_schedules(pool: &PgPool) -> Result<Vec<ScheduleSummary>> {
+pub async fn list_schedules(pool: &SqlitePool) -> Result<Vec<ScheduleSummary>> {
     let rows = sqlx::query(
         r#"
         SELECT 
@@ -29,8 +29,8 @@ pub async fn list_schedules(pool: &PgPool) -> Result<Vec<ScheduleSummary>> {
             COALESCE(s.branch, 'main') as branch,
             COALESCE(s.timezone, 'UTC') as timezone,
             s.enabled,
-            to_char(s.last_run_at, 'YYYY-MM-DD HH24:MI:SS') as last_run_at,
-            to_char(s.next_run_at, 'YYYY-MM-DD HH24:MI:SS') as next_run_at
+            s.last_run_at,
+            s.next_run_at
         FROM scheduled_job s
         JOIN repo r ON r.id = s.repo_id
         ORDER BY s.next_run_at ASC NULLS LAST
@@ -56,12 +56,12 @@ pub async fn list_schedules(pool: &PgPool) -> Result<Vec<ScheduleSummary>> {
         .collect())
 }
 
-pub async fn toggle_schedule(pool: &PgPool, schedule_id: i64, enabled: bool) -> Result<bool> {
+pub async fn toggle_schedule(pool: &SqlitePool, schedule_id: i64, enabled: bool) -> Result<bool> {
     let result = sqlx::query(
         r#"
         UPDATE scheduled_job
-        SET enabled = $2, updated_at = NOW()
-        WHERE id = $1
+        SET enabled = ?2, updated_at = datetime('now')
+        WHERE id = ?1
         "#,
     )
     .bind(schedule_id)
@@ -72,9 +72,9 @@ pub async fn toggle_schedule(pool: &PgPool, schedule_id: i64, enabled: bool) -> 
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn delete_schedule_by_id(pool: &PgPool, schedule_id: i64) -> Result<bool> {
+pub async fn delete_schedule_by_id(pool: &SqlitePool, schedule_id: i64) -> Result<bool> {
     let result = sqlx::query(
-        r#"DELETE FROM scheduled_job WHERE id = $1"#,
+        r#"DELETE FROM scheduled_job WHERE id = ?1"#,
     )
     .bind(schedule_id)
     .execute(pool)

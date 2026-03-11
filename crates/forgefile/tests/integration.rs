@@ -156,8 +156,8 @@ fn test_secrets_vault_path() {
 
     assert_eq!(ast.secrets.len(), 1);
     assert_eq!(
-        ast.secrets[0].vault_path,
-        Expr::Literal("myapp/prod".into())
+        ast.secrets[0].source,
+        SecretsSource::Vault(Expr::Literal("myapp/prod".into()))
     );
 }
 
@@ -250,7 +250,7 @@ fn test_full_secrets() {
     let ast = parse_and_validate(&fixture("full.forge"));
     let secrets = &ast.secrets[0];
 
-    assert_eq!(secrets.vault_path, Expr::Literal("foundry/prod".into()));
+    assert_eq!(secrets.source, SecretsSource::Vault(Expr::Literal("foundry/prod".into())));
     assert_eq!(secrets.keys.len(), 2);
     assert_eq!(secrets.keys[0].name, "DATABASE_URL");
     assert_eq!(secrets.keys[0].alias, None);

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>me.l3s.foundry</string>
+
+    <key>Program</key>
+    <string>/usr/local/bin/foundryd</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DATABASE_URL</key>
+        <string>sqlite:///Users/lucas/.foundry/foundry.db?mode=rwc</string>
+
+        <key>FOUNDRY_SECRETS_PATH</key>
+        <string>/Users/lucas/.foundry/secrets.age</string>
+
+        <key>FOUNDRY_SECRETS_PASSPHRASE</key>
+        <string>CHANGE_ME</string>
+
+        <key>FOUNDRY_WORKSPACE_DIR</key>
+        <string>/Users/lucas/workspace</string>
+
+        <key>RUST_LOG</key>
+        <string>info</string>
+
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/Cellar/docker/29.2.1/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/lucas/.foundry/foundry.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/lucas/.foundry/foundry.err</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/lucas</string>
+</dict>
+</plist>

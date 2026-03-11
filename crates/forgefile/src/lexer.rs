@@ -30,6 +30,8 @@ pub enum Token {
     From,
     #[token("vault")]
     Vault,
+    #[token("store")]
+    Store,
     #[token("service")]
     Service,
     #[token("services")]
@@ -187,6 +189,7 @@ impl Token {
             Token::Secrets => Some("secrets".into()),
             Token::From => Some("from".into()),
             Token::Vault => Some("vault".into()),
+            Token::Store => Some("store".into()),
             Token::Service => Some("service".into()),
             Token::Services => Some("services".into()),
             Token::Matrix => Some("matrix".into()),

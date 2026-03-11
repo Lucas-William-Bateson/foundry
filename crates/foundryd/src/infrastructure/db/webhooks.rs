@@ -1,11 +1,11 @@
 //! Webhook event storage — store and retrieve raw webhook events.
 
 use anyhow::Result;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 /// Store raw webhook event for debugging/replay
 pub async fn store_webhook_event(
-    pool: &PgPool,
+    pool: &SqlitePool,
     event_type: &str,
     delivery_id: Option<&str>,
     payload: &[u8],
@@ -16,7 +16,7 @@ pub async fn store_webhook_event(
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO webhook_event (event_type, delivery_id, payload, job_id, processed)
-        VALUES ($1, $2, $3, $4, $5)
+        VALUES (?1, ?2, ?3, ?4, ?5)
         RETURNING id
         "#,
     )

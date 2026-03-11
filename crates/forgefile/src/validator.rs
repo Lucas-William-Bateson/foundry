@@ -11,9 +11,9 @@ pub fn validate(forgefile: &Forgefile) -> Result<(), Vec<ForgeError>> {
     let service_names: HashSet<&str> =
         forgefile.services.iter().map(|s| s.name.as_str()).collect();
 
-    // Rule 8: vault paths must not be empty
+    // Rule 8: secrets paths must not be empty
     for secret in &forgefile.secrets {
-        validate_vault_path(&secret.vault_path, &mut errors);
+        validate_secrets_path(secret.path_expr(), &mut errors);
     }
 
     // Rule 1: stage names must be globally unique across all trigger blocks
@@ -174,14 +174,14 @@ fn validate_matrix(
     validate_stage(&matrix.stage, item_names, runner_names, service_names, errors);
 }
 
-fn validate_vault_path(expr: &Expr, errors: &mut Vec<ForgeError>) {
+fn validate_secrets_path(expr: &Expr, errors: &mut Vec<ForgeError>) {
     let is_empty = match expr {
         Expr::Literal(s) => s.trim().is_empty(),
         Expr::Interpolated(parts) => parts.is_empty(),
     };
     if is_empty {
         errors.push(ForgeError::ValidationError(
-            "vault path must not be empty".to_string(),
+            "secrets path must not be empty".to_string(),
         ));
     }
 }
@@ -402,14 +402,14 @@ mod tests {
         let ff = Forgefile {
             runners: vec![],
             secrets: vec![SecretsDef {
-                vault_path: Expr::Literal("".into()),
+                source: SecretsSource::Vault(Expr::Literal("".into())),
                 keys: vec![],
             }],
             services: vec![],
             triggers: vec![],
         };
         let errs = validate(&ff).unwrap_err();
-        assert!(errs.iter().any(|e| format!("{e}").contains("vault path must not be empty")));
+        assert!(errs.iter().any(|e| format!("{e}").contains("secrets path must not be empty")));
     }
 
     #[test]
@@ -432,7 +432,7 @@ mod tests {
                 image: None,
             }],
             secrets: vec![SecretsDef {
-                vault_path: Expr::Literal("secret/ci".into()),
+                source: SecretsSource::Vault(Expr::Literal("secret/ci".into())),
                 keys: vec![SecretKey {
                     name: "TOKEN".into(),
                     alias: None,
@@ -484,5 +484,37 @@ mod tests {
         let ff = minimal_forgefile(vec![PipelineItem::Stage(stage)]);
         let errs = validate(&ff).unwrap_err();
         assert!(errs.iter().any(|e| format!("{e}").contains("empty name")));
+    }
+
+    #[test]
+    fn empty_store_path_error() {
+        let ff = Forgefile {
+            runners: vec![],
+            secrets: vec![SecretsDef {
+                source: SecretsSource::Store(Expr::Literal("".into())),
+                keys: vec![],
+            }],
+            services: vec![],
+            triggers: vec![],
+        };
+        let errs = validate(&ff).unwrap_err();
+        assert!(errs.iter().any(|e| format!("{e}").contains("secrets path must not be empty")));
+    }
+
+    #[test]
+    fn valid_store_secrets_passes() {
+        let ff = Forgefile {
+            runners: vec![],
+            secrets: vec![SecretsDef {
+                source: SecretsSource::Store(Expr::Literal("myapp/prod".into())),
+                keys: vec![SecretKey {
+                    name: "API_KEY".into(),
+                    alias: None,
+                }],
+            }],
+            services: vec![],
+            triggers: vec![],
+        };
+        assert!(validate(&ff).is_ok());
     }
 }

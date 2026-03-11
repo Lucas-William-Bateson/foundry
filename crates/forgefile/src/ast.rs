@@ -51,11 +51,29 @@ pub enum RunnerExpr {
 // Secrets
 // ---------------------------------------------------------------------------
 
-/// `secrets from vault("path") { ... }` — vault-backed secret imports.
+/// Where secrets are loaded from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SecretsSource {
+    /// `vault("path")` — HashiCorp Vault.
+    Vault(Expr),
+    /// `store("path")` — local encrypted secrets store.
+    Store(Expr),
+}
+
+/// `secrets from vault("path") { ... }` or `secrets from store("path") { ... }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SecretsDef {
-    pub vault_path: Expr,
+    pub source: SecretsSource,
     pub keys: Vec<SecretKey>,
+}
+
+impl SecretsDef {
+    /// Returns the path expression regardless of source kind.
+    pub fn path_expr(&self) -> &Expr {
+        match &self.source {
+            SecretsSource::Vault(e) | SecretsSource::Store(e) => e,
+        }
+    }
 }
 
 /// A single key inside a `secrets` block, optionally aliased.

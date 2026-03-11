@@ -20,3 +20,7 @@ hex = "0.4"
 reqwest = { version = "0.12", features = ["json"] }
 secrecy.workspace = true
 zeroize.workspace = true
+age = { version = "0.11", features = ["armor"] }
+
+[dev-dependencies]
+tempfile = "3"

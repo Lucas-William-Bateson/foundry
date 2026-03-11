@@ -3,13 +3,13 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use cron::Schedule;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tracing::{info, error, debug, warn};
 
 /// How long a job can stay in 'running' before being considered stale.
 const STALE_JOB_TIMEOUT_MINUTES: i64 = 120;
 
-pub async fn run_scheduler(pool: Arc<PgPool>) {
+pub async fn run_scheduler(pool: Arc<SqlitePool>) {
     info!("Starting scheduler");
 
     loop {
@@ -25,17 +25,18 @@ pub async fn run_scheduler(pool: Arc<PgPool>) {
     }
 }
 
-async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
+async fn check_and_run_scheduled_jobs(pool: &SqlitePool) -> anyhow::Result<()> {
     let now = Utc::now();
+    let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let due_jobs = sqlx::query_as::<_, ScheduledJobRow>(
         r#"
         SELECT id, repo_id, cron_expression, branch, COALESCE(timezone, 'UTC') as timezone
         FROM scheduled_job
-        WHERE enabled = TRUE AND (next_run_at IS NULL OR next_run_at <= $1)
+        WHERE enabled = 1 AND (next_run_at IS NULL OR next_run_at <= ?1)
         "#,
     )
-    .bind(now)
+    .bind(&now_str)
     .fetch_all(pool)
     .await?;
 
@@ -55,16 +56,17 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
         if let Ok(schedule) = Schedule::from_str(&scheduled.cron_expression) {
             let next = compute_next_run(&schedule, &scheduled.timezone);
             if let Some(next) = next {
+                let next_str = next.format("%Y-%m-%d %H:%M:%S").to_string();
                 sqlx::query(
                     r#"
                     UPDATE scheduled_job
-                    SET last_run_at = $2, next_run_at = $3, updated_at = NOW()
-                    WHERE id = $1
+                    SET last_run_at = ?2, next_run_at = ?3, updated_at = datetime('now')
+                    WHERE id = ?1
                     "#,
                 )
                 .bind(scheduled.id)
-                .bind(now)
-                .bind(next)
+                .bind(&now_str)
+                .bind(&next_str)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -78,7 +80,7 @@ async fn check_and_run_scheduled_jobs(pool: &PgPool) -> anyhow::Result<()> {
 
 async fn enqueue_scheduled_job<'e, E>(executor: E, scheduled: &ScheduledJobRow) -> anyhow::Result<()>
 where
-    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
     // We need two queries, so accept a generic executor that works with both pool and transaction.
     // For the repo lookup, we embed it in a single INSERT ... SELECT to keep it in one statement.
@@ -96,8 +98,8 @@ where
             repo_id, git_sha, git_ref, status, trigger_type,
             scheduled_job_id, commit_message
         )
-        SELECT $1, $2, $3, 'queued', 'scheduled', $4, $5
-        WHERE EXISTS (SELECT 1 FROM repo WHERE id = $1)
+        SELECT ?1, ?2, ?3, 'queued', 'scheduled', ?4, ?5
+        WHERE EXISTS (SELECT 1 FROM repo WHERE id = ?1)
         "#,
     )
     .bind(scheduled.repo_id)
@@ -119,17 +121,21 @@ where
 
 /// Reap jobs stuck in 'running' state for longer than STALE_JOB_TIMEOUT_MINUTES.
 /// These are typically caused by agent crashes or network partitions.
-async fn reap_stale_jobs(pool: &PgPool) -> anyhow::Result<()> {
+async fn reap_stale_jobs(pool: &SqlitePool) -> anyhow::Result<()> {
+    let threshold = (Utc::now() - chrono::Duration::minutes(STALE_JOB_TIMEOUT_MINUTES))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
     let result = sqlx::query(
         r#"
         UPDATE job
         SET status = 'failed',
-            finished_at = NOW()
+            finished_at = datetime('now')
         WHERE status = 'running'
-          AND started_at < NOW() - make_interval(mins => $1)
+          AND started_at < ?1
         "#,
     )
-    .bind(STALE_JOB_TIMEOUT_MINUTES as i32)
+    .bind(&threshold)
     .execute(pool)
     .await?;
 
@@ -142,7 +148,7 @@ async fn reap_stale_jobs(pool: &PgPool) -> anyhow::Result<()> {
 }
 
 pub async fn upsert_schedule(
-    pool: &PgPool,
+    pool: &SqlitePool,
     repo_id: i64,
     cron_expression: &str,
     branch: Option<&str>,
@@ -158,16 +164,17 @@ pub async fn upsert_schedule(
     }
 
     let next_run = compute_next_run(&schedule, tz_str);
+    let next_run_str = next_run.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
 
     let row: (i64,) = sqlx::query_as(
         r#"
         INSERT INTO scheduled_job (repo_id, cron_expression, branch, timezone, next_run_at)
-        VALUES ($1, $2, COALESCE($3, 'main'), COALESCE($4, 'UTC'), $5)
+        VALUES (?1, ?2, COALESCE(?3, 'main'), COALESCE(?4, 'UTC'), ?5)
         ON CONFLICT (repo_id, branch) DO UPDATE SET
             cron_expression = EXCLUDED.cron_expression,
             timezone = COALESCE(EXCLUDED.timezone, scheduled_job.timezone),
             next_run_at = EXCLUDED.next_run_at,
-            updated_at = NOW()
+            updated_at = datetime('now')
         RETURNING id
         "#,
     )
@@ -175,18 +182,18 @@ pub async fn upsert_schedule(
     .bind(cron_expression)
     .bind(branch)
     .bind(timezone)
-    .bind(next_run)
+    .bind(&next_run_str)
     .fetch_one(pool)
     .await?;
 
     Ok(row.0)
 }
 
-pub async fn delete_schedule(pool: &PgPool, repo_id: i64, branch: Option<&str>) -> anyhow::Result<bool> {
+pub async fn delete_schedule(pool: &SqlitePool, repo_id: i64, branch: Option<&str>) -> anyhow::Result<bool> {
     let branch = branch.unwrap_or("main");
 
     let result = sqlx::query(
-        r#"DELETE FROM scheduled_job WHERE repo_id = $1 AND branch = $2"#,
+        r#"DELETE FROM scheduled_job WHERE repo_id = ?1 AND branch = ?2"#,
     )
     .bind(repo_id)
     .bind(branch)

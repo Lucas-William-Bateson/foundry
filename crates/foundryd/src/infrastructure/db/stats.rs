@@ -1,7 +1,7 @@
 //! Statistics and dashboard queries — job counts, success rates, recent activity.
 
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+use sqlx::{SqlitePool, Row};
 
 #[derive(Debug, Default, serde::Serialize)]
 pub struct DashboardStats {
@@ -12,14 +12,14 @@ pub struct DashboardStats {
     pub running_count: i64,
 }
 
-pub async fn get_dashboard_stats(pool: &PgPool) -> Result<DashboardStats> {
+pub async fn get_dashboard_stats(pool: &SqlitePool) -> Result<DashboardStats> {
     let row = sqlx::query(
         r#"
         SELECT 
             COUNT(*) as total_jobs,
-            COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours') as jobs_today,
+            COUNT(*) FILTER (WHERE created_at > datetime('now', '-24 hours')) as jobs_today,
             COALESCE(
-                COUNT(*) FILTER (WHERE status = 'success')::float / 
+                CAST(COUNT(*) FILTER (WHERE status = 'success') AS REAL) / 
                 NULLIF(COUNT(*) FILTER (WHERE status IN ('success', 'failed')), 0) * 100,
                 0
             ) as success_rate,

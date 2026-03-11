@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use forgefile::Forgefile;
 use forgefile::ast::{
     Condition, DeployDef, Expr, ExprPart, NeedsRef, PipelineItem, RunnerDef, RunnerExpr,
-    RunnerRef, SecretsDef, StageDef, Trigger, TriggerBlock,
+    RunnerRef, SecretsDef, SecretsSource, StageDef, Trigger, TriggerBlock,
 };
 
 use foundry_core::config::{
@@ -14,10 +14,20 @@ use foundry_core::config::{
 };
 use foundry_core::types::RunnerRequirements;
 
+/// Which backend a secrets block uses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SecretsBackend {
+    /// HashiCorp Vault.
+    Vault,
+    /// Local encrypted secrets store.
+    Store,
+}
+
 /// Secrets configuration extracted from the Forgefile.
 #[derive(Debug, Clone)]
 pub struct SecretsConfig {
-    pub vault_path: String,
+    pub backend: SecretsBackend,
+    pub path: String,
     pub keys: Vec<SecretKeyMapping>,
 }
 
@@ -136,16 +146,23 @@ fn build_runner_map(runners: &[RunnerDef]) -> HashMap<String, RunnerDef> {
 fn convert_secrets(secrets_defs: &[SecretsDef]) -> Vec<SecretsConfig> {
     secrets_defs
         .iter()
-        .map(|s| SecretsConfig {
-            vault_path: expr_to_string(&s.vault_path),
-            keys: s
-                .keys
-                .iter()
-                .map(|k| SecretKeyMapping {
-                    name: k.name.clone(),
-                    alias: k.alias.clone(),
-                })
-                .collect(),
+        .map(|s| {
+            let (backend, path_expr) = match &s.source {
+                SecretsSource::Vault(e) => (SecretsBackend::Vault, e),
+                SecretsSource::Store(e) => (SecretsBackend::Store, e),
+            };
+            SecretsConfig {
+                backend,
+                path: expr_to_string(path_expr),
+                keys: s
+                    .keys
+                    .iter()
+                    .map(|k| SecretKeyMapping {
+                        name: k.name.clone(),
+                        alias: k.alias.clone(),
+                    })
+                    .collect(),
+            }
         })
         .collect()
 }
@@ -470,8 +487,8 @@ fn topological_sort(stages: Vec<StageConfig>) -> Vec<StageConfig> {
     sorted.into_iter().map(|i| stages[i].clone()).collect()
 }
 
-/// Convert Forgefile secret key mappings to the format needed for Vault injection.
-/// Returns a map of env_var_name -> vault_key_name.
+/// Convert Forgefile secret key mappings to the format needed for secret injection.
+/// Returns a map of env_var_name -> secret_key_name.
 pub fn build_secret_alias_map(secrets: &[SecretsConfig]) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for secret_cfg in secrets {
@@ -544,7 +561,7 @@ mod tests {
         let ff = Forgefile {
             runners: vec![],
             secrets: vec![SecretsDef {
-                vault_path: Expr::Literal("myapp/prod".into()),
+                source: SecretsSource::Vault(Expr::Literal("myapp/prod".into())),
                 keys: vec![
                     SecretKey {
                         name: "DB_PASSWORD".into(),
@@ -562,11 +579,33 @@ mod tests {
 
         let plan = convert(&ff, "refs/heads/main");
         assert_eq!(plan.secrets.len(), 1);
-        assert_eq!(plan.secrets[0].vault_path, "myapp/prod");
+        assert_eq!(plan.secrets[0].backend, SecretsBackend::Vault);
+        assert_eq!(plan.secrets[0].path, "myapp/prod");
 
         let alias_map = build_secret_alias_map(&plan.secrets);
         assert_eq!(alias_map.get("DB_PASSWORD"), Some(&"DB_PASSWORD".to_string()));
         assert_eq!(alias_map.get("MY_API_KEY"), Some(&"API_KEY".to_string()));
+    }
+
+    #[test]
+    fn test_convert_store_secrets() {
+        let ff = Forgefile {
+            runners: vec![],
+            secrets: vec![SecretsDef {
+                source: SecretsSource::Store(Expr::Literal("myapp/staging".into())),
+                keys: vec![SecretKey {
+                    name: "TOKEN".into(),
+                    alias: None,
+                }],
+            }],
+            services: vec![],
+            triggers: vec![],
+        };
+
+        let plan = convert(&ff, "refs/heads/main");
+        assert_eq!(plan.secrets.len(), 1);
+        assert_eq!(plan.secrets[0].backend, SecretsBackend::Store);
+        assert_eq!(plan.secrets[0].path, "myapp/staging");
     }
 
     #[test]

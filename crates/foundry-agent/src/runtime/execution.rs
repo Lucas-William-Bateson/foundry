@@ -134,27 +134,51 @@ pub async fn execute_pipeline(
 
         let plan = forgefile_converter::convert(&forgefile, &job.git_ref);
 
-        // Fetch secrets from Vault if configured
+        // Fetch secrets from configured backend (Vault or Store)
         let mut env_vars: std::collections::HashMap<String, String> = plan.env.clone();
         for secret_cfg in &plan.secrets {
-            match fetch_forgefile_vault_secrets(client, job, trusted_agent_config, secret_cfg).await {
-                Ok(secrets) => {
-                    let alias_map = forgefile_converter::build_secret_alias_map(&[secret_cfg.clone()]);
-                    let count = secrets.len();
-                    for (key, value) in secrets {
-                        // Apply alias mapping: if alias exists, inject under alias name
-                        let env_key = alias_map
-                            .iter()
-                            .find(|(_, vault_key)| **vault_key == key)
-                            .map(|(env_name, _)| env_name.clone())
-                            .unwrap_or(key);
-                        env_vars.insert(env_key, value.expose_secret().to_string());
+            match &secret_cfg.backend {
+                forgefile_converter::SecretsBackend::Vault => {
+                    match fetch_forgefile_vault_secrets(client, job, trusted_agent_config, secret_cfg).await {
+                        Ok(secrets) => {
+                            let alias_map = forgefile_converter::build_secret_alias_map(&[secret_cfg.clone()]);
+                            let count = secrets.len();
+                            for (key, value) in secrets {
+                                let env_key = alias_map
+                                    .iter()
+                                    .find(|(_, vault_key)| **vault_key == key)
+                                    .map(|(env_name, _)| env_name.clone())
+                                    .unwrap_or(key);
+                                env_vars.insert(env_key, value.expose_secret().to_string());
+                            }
+                            client.log(job, &format!("🔐 Injected {} secret(s) from Vault", count)).await?;
+                        }
+                        Err(e) => {
+                            client.log(job, &format!("⚠️  Vault secrets fetch failed: {}", e)).await?;
+                            warn!("Vault secrets fetch failed for job {}: {}", job.id, e);
+                        }
                     }
-                    client.log(job, &format!("🔐 Injected {} secret(s) from Vault", count)).await?;
                 }
-                Err(e) => {
-                    client.log(job, &format!("⚠️  Vault secrets fetch failed: {}", e)).await?;
-                    warn!("Vault secrets fetch failed for job {}: {}", job.id, e);
+                forgefile_converter::SecretsBackend::Store => {
+                    match fetch_forgefile_store_secrets(client, job, secret_cfg).await {
+                        Ok(secrets) => {
+                            let alias_map = forgefile_converter::build_secret_alias_map(&[secret_cfg.clone()]);
+                            let count = secrets.len();
+                            for (key, value) in secrets {
+                                let env_key = alias_map
+                                    .iter()
+                                    .find(|(_, store_key)| **store_key == key)
+                                    .map(|(env_name, _)| env_name.clone())
+                                    .unwrap_or(key);
+                                env_vars.insert(env_key, value);
+                            }
+                            client.log(job, &format!("🔐 Injected {} secret(s) from secrets store", count)).await?;
+                        }
+                        Err(e) => {
+                            client.log(job, &format!("⚠️  Secrets store fetch failed: {}", e)).await?;
+                            warn!("Secrets store fetch failed for job {}: {}", job.id, e);
+                        }
+                    }
                 }
             }
         }
@@ -441,11 +465,11 @@ async fn fetch_forgefile_vault_secrets(
     }
 
     client
-        .log(job, &format!("🔑 Fetching secrets from Vault path: {}", secrets_cfg.vault_path))
+        .log(job, &format!("🔑 Fetching secrets from Vault path: {}", secrets_cfg.path))
         .await?;
 
     let mut secrets = vault_client
-        .fetch_ci_secrets(bootstrap_token, &secrets_cfg.vault_path)
+        .fetch_ci_secrets(bootstrap_token, &secrets_cfg.path)
         .await?;
 
     // Filter to requested keys if specified
@@ -459,6 +483,53 @@ async fn fetch_forgefile_vault_secrets(
     }
 
     Ok(secrets)
+}
+
+/// Fetch secrets from the local encrypted secrets store for a CI job.
+///
+/// Reads `FOUNDRY_SECRETS_PATH` and `FOUNDRY_SECRETS_PASSPHRASE` from the
+/// environment, loads the store, and returns the requested key/value pairs.
+async fn fetch_forgefile_store_secrets(
+    client: &ServerClient,
+    job: &ClaimedJob,
+    secrets_cfg: &forgefile_converter::SecretsConfig,
+) -> Result<std::collections::HashMap<String, String>> {
+    let store_path = std::env::var("FOUNDRY_SECRETS_PATH")
+        .context("FOUNDRY_SECRETS_PATH not set — required for secrets from store()")?;
+    let passphrase = std::env::var("FOUNDRY_SECRETS_PASSPHRASE")
+        .context("FOUNDRY_SECRETS_PASSPHRASE not set — required for secrets from store()")?;
+
+    client
+        .log(job, &format!("🔑 Loading secrets from store path: {}", secrets_cfg.path))
+        .await?;
+
+    let store = foundry_core::SecretsStore::load(std::path::Path::new(&store_path), &passphrase)
+        .context("failed to load secrets store")?;
+
+    let secret_map = store
+        .get_secrets(&secrets_cfg.path)
+        .cloned()
+        .unwrap_or_default();
+
+    // Filter to requested keys if specified
+    let mut result: std::collections::HashMap<String, String> = if secrets_cfg.keys.is_empty() {
+        secret_map
+    } else {
+        let requested_keys: std::collections::HashSet<&str> = secrets_cfg
+            .keys
+            .iter()
+            .map(|k| k.name.as_str())
+            .collect();
+        secret_map
+            .into_iter()
+            .filter(|(k, _)| requested_keys.contains(k.as_str()))
+            .collect()
+    };
+
+    // Only keep filtered keys
+    let _ = &mut result;
+
+    Ok(result)
 }
 
 /// Fetch secrets from Vault for a CI job.

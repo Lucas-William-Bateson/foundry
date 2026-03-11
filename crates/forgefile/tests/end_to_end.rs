@@ -305,7 +305,7 @@ on push("main") {
     let secrets = &ast.secrets[0];
 
     // Vault path extracted correctly
-    assert_eq!(secrets.vault_path, Expr::Literal("myapp/prod".into()));
+    assert_eq!(secrets.source, SecretsSource::Vault(Expr::Literal("myapp/prod".into())));
 
     // Keys listed correctly
     assert_eq!(secrets.keys.len(), 3);
@@ -503,7 +503,7 @@ on schedule("0 3 * * *", tz: "UTC") {
     // --- 1 secrets block with 3 keys (1 alias) ---
     assert_eq!(ast.secrets.len(), 1);
     let secrets = &ast.secrets[0];
-    assert_eq!(secrets.vault_path, Expr::Literal("myapp/prod".into()));
+    assert_eq!(secrets.source, SecretsSource::Vault(Expr::Literal("myapp/prod".into())));
     assert_eq!(secrets.keys.len(), 3);
     assert_eq!(secrets.keys[0].name, "DATABASE_URL");
     assert_eq!(secrets.keys[0].alias, None);

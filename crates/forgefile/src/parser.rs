@@ -266,10 +266,34 @@ impl Parser {
     fn parse_secrets_def(&mut self) -> Result<SecretsDef, ForgeError> {
         self.expect(&Token::Secrets)?;
         self.expect(&Token::From)?;
-        self.expect(&Token::Vault)?;
-        self.expect(&Token::LParen)?;
-        let vault_path = self.parse_expr()?;
-        self.expect(&Token::RParen)?;
+
+        // Accept either vault("path") or store("path")
+        let source = match self.peek() {
+            Some(Token::Vault) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let path = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                SecretsSource::Vault(path)
+            }
+            Some(Token::Store) => {
+                self.advance();
+                self.expect(&Token::LParen)?;
+                let path = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                SecretsSource::Store(path)
+            }
+            _ => {
+                return Err(ForgeError::ParseError {
+                    line: self.current_line(),
+                    message: format!(
+                        "expected 'vault' or 'store' after 'secrets from', found {:?}",
+                        self.peek()
+                    ),
+                });
+            }
+        };
+
         self.expect(&Token::LBrace)?;
 
         let mut keys = Vec::new();
@@ -285,7 +309,7 @@ impl Parser {
         }
 
         self.expect(&Token::RBrace)?;
-        Ok(SecretsDef { vault_path, keys })
+        Ok(SecretsDef { source, keys })
     }
 
     // ------- Service -------
@@ -824,7 +848,7 @@ mod tests {
         }"#;
         let ff = parse(input).unwrap();
         assert_eq!(ff.secrets.len(), 1);
-        assert_eq!(ff.secrets[0].vault_path, Expr::Literal("foundry/prod".into()));
+        assert_eq!(ff.secrets[0].source, SecretsSource::Vault(Expr::Literal("foundry/prod".into())));
         assert_eq!(ff.secrets[0].keys.len(), 2);
         assert_eq!(ff.secrets[0].keys[0].name, "API_KEY");
         assert_eq!(ff.secrets[0].keys[0].alias, Some("GH_TOKEN".into()));
@@ -1033,5 +1057,39 @@ mod tests {
         let err = parse(input).unwrap_err();
         assert!(!err.is_empty());
         assert!(format!("{:?}", err[0]).contains("unexpected token"));
+    }
+
+    #[test]
+    fn test_secrets_from_store() {
+        let input = r#"secrets from store("myapp/prod") {
+            KEY1
+            KEY2
+        }"#;
+        let ff = parse(input).unwrap();
+        assert_eq!(ff.secrets.len(), 1);
+        assert_eq!(
+            ff.secrets[0].source,
+            SecretsSource::Store(Expr::Literal("myapp/prod".into()))
+        );
+        assert_eq!(ff.secrets[0].keys.len(), 2);
+        assert_eq!(ff.secrets[0].keys[0].name, "KEY1");
+        assert_eq!(ff.secrets[0].keys[0].alias, None);
+        assert_eq!(ff.secrets[0].keys[1].name, "KEY2");
+        assert_eq!(ff.secrets[0].keys[1].alias, None);
+    }
+
+    #[test]
+    fn test_secrets_from_vault_still_works() {
+        let input = r#"secrets from vault("myapp/prod") {
+            KEY1
+        }"#;
+        let ff = parse(input).unwrap();
+        assert_eq!(ff.secrets.len(), 1);
+        assert_eq!(
+            ff.secrets[0].source,
+            SecretsSource::Vault(Expr::Literal("myapp/prod".into()))
+        );
+        assert_eq!(ff.secrets[0].keys.len(), 1);
+        assert_eq!(ff.secrets[0].keys[0].name, "KEY1");
     }
 }
