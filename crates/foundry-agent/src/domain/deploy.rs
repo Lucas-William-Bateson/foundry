@@ -1,6 +1,7 @@
 //! Deployment logic — container deployment, compose-based deploys, domain routing,
 //! and Cloudflare integration.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -120,6 +121,54 @@ pub(crate) async fn run_deploy(
 
         let compose_path = repo_dir.join(compose_file);
 
+        // Build the complete set of env vars: deploy metadata + vault secrets + Forgefile env
+        let mut env_vars: HashMap<String, String> = HashMap::new();
+
+        // Deploy metadata (lowest priority — can be overridden by vault/env)
+        env_vars.insert("APP_NAME".into(), app_name.to_string());
+        env_vars.insert("CONTAINER_NAME".into(), format!("foundry-{}", app_name));
+        env_vars.insert("ENVIRONMENT".into(), "production".into());
+        env_vars.insert("VERSION".into(), job.git_sha.clone());
+        if let Some(port) = untrusted_repo_config.deploy.port {
+            env_vars.insert("APP_PORT".into(), port.to_string());
+            env_vars.insert("HOST_PORT".into(), port.to_string());
+        }
+        if let Some(domain) = &untrusted_repo_config.deploy.domain {
+            env_vars.insert("APP_DOMAIN".into(), domain.clone());
+        }
+
+        // Vault secrets + Forgefile env (highest priority — overrides metadata defaults)
+        for (key, value) in &untrusted_repo_config.env {
+            env_vars.insert(key.clone(), value.clone());
+        }
+
+        if !untrusted_repo_config.env.is_empty() {
+            client.log(job, &format!("🔐 Injecting {} env var(s) from Vault", untrusted_repo_config.env.len())).await?;
+        }
+
+        // Write env vars to .env and secrets.env so compose files that use
+        // env_file or ${VAR} interpolation can access them
+        let env_content: String = env_vars.iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Write .env next to the compose file
+        if let Some(compose_dir) = compose_path.parent() {
+            let _ = tokio::fs::write(compose_dir.join(".env"), &env_content).await;
+        }
+        // Write secrets.env and .env in repo root for backward compat
+        let _ = tokio::fs::write(repo_dir.join(".env"), &env_content).await;
+        let _ = tokio::fs::write(repo_dir.join("secrets.env"), &env_content).await;
+
+        // Stop existing project containers to free ports before re-deploying
+        client.log(job, &format!("Stopping existing {} containers...", app_name)).await?;
+        let _ = Command::new("docker")
+            .args(["compose", "-p", app_name, "down", "--remove-orphans"])
+            .current_dir(repo_dir)
+            .output()
+            .await;
+
         let mut args = vec![
             "compose".to_string(),
             "-f".to_string(),
@@ -130,17 +179,12 @@ pub(crate) async fn run_deploy(
 
         args.extend(["up", "-d", "--build", "--force-recreate"].iter().map(|s| s.to_string()));
 
-        // Pass env vars (including Vault secrets) directly to the docker compose
-        // process — no .env files written to disk. Compose inherits these for
-        // ${VAR} interpolation and services pick them up via `environment:`.
         let mut cmd = Command::new("docker");
         cmd.args(&args).current_dir(repo_dir);
 
-        if !untrusted_repo_config.env.is_empty() {
-            client.log(job, &format!("🔐 Injecting {} env var(s) into compose", untrusted_repo_config.env.len())).await?;
-            for (key, value) in &untrusted_repo_config.env {
-                cmd.env(key, value);
-            }
+        // Pass all env vars to the compose process
+        for (key, value) in &env_vars {
+            cmd.env(key, value);
         }
 
         let output = cmd
