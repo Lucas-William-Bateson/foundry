@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 use std::fmt;
 
 #[derive(Clone)]
@@ -10,6 +11,19 @@ pub struct Config {
     pub agent_secret: Option<String>,
     pub tunnel: Option<TunnelConfig>,
     pub auth: Option<AuthConfig>,
+
+    // Built-in worker config
+    pub workspace_dir: String,
+    pub default_command: String,
+    pub poll_interval_secs: u64,
+    pub github_app_id: Option<String>,
+    pub github_installation_id: Option<String>,
+    pub github_private_key: Option<String>,
+    pub self_repo: Option<String>,
+    pub self_deploy_script: Option<String>,
+    pub vault_addr: Option<String>,
+    pub vault_role_id: Option<String>,
+    pub vault_bootstrap_token: Option<SecretString>,
 }
 
 impl fmt::Debug for Config {
@@ -22,6 +36,12 @@ impl fmt::Debug for Config {
             .field("agent_secret", &self.agent_secret.as_ref().map(|_| "[REDACTED]"))
             .field("tunnel", &self.tunnel)
             .field("auth", &self.auth)
+            .field("workspace_dir", &self.workspace_dir)
+            .field("default_command", &self.default_command)
+            .field("poll_interval_secs", &self.poll_interval_secs)
+            .field("github_app_id", &self.github_app_id)
+            .field("github_installation_id", &self.github_installation_id)
+            .field("github_private_key", &self.github_private_key.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -127,16 +147,65 @@ impl Config {
             None
         };
 
+        let github_private_key = match std::env::var("GITHUB_APP_PRIVATE_KEY_PATH") {
+            Ok(path) => Some(
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("Failed to read GitHub App private key from {}", path))?,
+            ),
+            Err(_) => std::env::var("GITHUB_APP_PRIVATE_KEY").ok(),
+        };
+
         Ok(Self {
             bind_addr,
             bind_port,
+            // e.g. sqlite:///absolute/path/to/foundry.db?mode=rwc
             database_url: std::env::var("DATABASE_URL")
-                .context("DATABASE_URL must be set")?,
+                .context("DATABASE_URL must be set (e.g. sqlite:///path/to/foundry.db?mode=rwc)")?,
             github_webhook_secret: std::env::var("GITHUB_WEBHOOK_SECRET")
                 .context("GITHUB_WEBHOOK_SECRET must be set")?,
             agent_secret: std::env::var("FOUNDRY_AGENT_SECRET").ok(),
             tunnel,
             auth,
+
+            // Built-in worker config
+            workspace_dir: std::env::var("FOUNDRY_WORKSPACE_DIR")
+                .unwrap_or_else(|_| "/tmp/foundry".to_string()),
+            default_command: std::env::var("FOUNDRY_DEFAULT_COMMAND")
+                .unwrap_or_else(|_| "echo 'No command configured'".to_string()),
+            poll_interval_secs: std::env::var("FOUNDRY_POLL_INTERVAL")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(5),
+            github_app_id: std::env::var("GITHUB_APP_ID").ok(),
+            github_installation_id: std::env::var("GITHUB_INSTALLATION_ID").ok(),
+            github_private_key,
+            self_repo: std::env::var("FOUNDRY_SELF_REPO").ok(),
+            self_deploy_script: std::env::var("FOUNDRY_SELF_DEPLOY_SCRIPT").ok(),
+            vault_addr: std::env::var("VAULT_ADDR").ok(),
+            vault_role_id: std::env::var("VAULT_ROLE_ID").ok(),
+            vault_bootstrap_token: Self::load_vault_bootstrap_token(),
         })
+    }
+
+    pub fn has_github_app(&self) -> bool {
+        self.github_app_id.is_some()
+            && self.github_installation_id.is_some()
+            && self.github_private_key.is_some()
+    }
+
+    fn load_vault_bootstrap_token() -> Option<SecretString> {
+        if let Ok(token) = std::env::var("VAULT_BOOTSTRAP_TOKEN") {
+            std::env::remove_var("VAULT_BOOTSTRAP_TOKEN");
+            return Some(SecretString::from(token));
+        }
+        if let Ok(path) = std::env::var("VAULT_BOOTSTRAP_TOKEN_FILE") {
+            if let Ok(token) = std::fs::read_to_string(&path) {
+                let token = token.trim().to_string();
+                if !token.is_empty() {
+                    return Some(SecretString::from(token));
+                }
+            }
+        }
+        None
     }
 }

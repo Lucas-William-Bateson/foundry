@@ -6,7 +6,7 @@ pub mod runtime;
 
 use anyhow::Result;
 use axum::Router;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
@@ -28,7 +28,7 @@ async fn security_headers(request: axum::http::Request<axum::body::Body>, next: 
 }
 
 pub struct AppState {
-    pub db: sqlx::PgPool,
+    pub db: sqlx::SqlitePool,
     pub config: Config,
     pub auth: Option<AuthState>,
 }
@@ -48,8 +48,8 @@ async fn main() -> Result<()> {
     let config = Config::from_env()?;
     info!("Starting foundryd on {}", config.bind_addr);
 
-    let db = PgPoolOptions::new()
-        .max_connections(10)
+    let db = SqlitePoolOptions::new()
+        .max_connections(5)
         .connect(&config.database_url)
         .await?;
 
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
 
     // Run migrations automatically
     info!("Running database migrations...");
-    sqlx::migrate!("../../migrations")
+    sqlx::migrate!("../../migrations_sqlite")
         .run(&db)
         .await?;
     info!("Migrations complete");
@@ -88,6 +88,25 @@ async fn main() -> Result<()> {
         domain::scheduler::run_scheduler(db_pool).await;
     });
 
+    // Initialize GitHub App for the built-in worker
+    let github_app = if config.has_github_app() {
+        info!("GitHub App authentication enabled for built-in worker");
+        match infrastructure::github_app::GitHubApp::new(
+            config.github_app_id.clone().unwrap(),
+            config.github_installation_id.clone().unwrap(),
+            config.github_private_key.as_ref().unwrap(),
+        ) {
+            Ok(app) => Some(Arc::new(app)),
+            Err(e) => {
+                tracing::warn!("Failed to initialize GitHub App: {} — worker will clone public repos only", e);
+                None
+            }
+        }
+    } else {
+        tracing::warn!("GitHub App not configured — built-in worker will clone public repos only");
+        None
+    };
+
     // Initialize auth if enabled
     let auth = if let Some(auth_config) = &config.auth {
         info!("Initializing OIDC authentication...");
@@ -112,6 +131,21 @@ async fn main() -> Result<()> {
 
     // Start the agent watchdog
     runtime::watchdog::start_agent_watchdog();
+
+    // Start the built-in worker
+    let worker_disabled = std::env::var("FOUNDRY_WORKER_DISABLED")
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+    if !worker_disabled {
+        let worker_state = state.clone();
+        let worker_github_app = github_app.clone();
+        tokio::spawn(async move {
+            runtime::worker::run_worker(worker_state, worker_github_app).await;
+        });
+        info!("Built-in worker started");
+    } else {
+        info!("Built-in worker disabled (FOUNDRY_WORKER_DISABLED=true)");
+    }
 
     // Build the router with optional auth protection
     let mut app = Router::new()

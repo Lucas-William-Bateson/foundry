@@ -9,6 +9,8 @@ path = "src/main.rs"
 
 [dependencies]
 foundry-core = { path = "../foundry-core" }
+forgefile = { path = "../forgefile" }
+hostname = "0.4"
 
 tokio = { workspace = true, features = ["full", "process"] }
 tokio-stream = "0.1"
@@ -22,7 +24,7 @@ serde.workspace = true
 serde_json.workspace = true
 secrecy.workspace = true
 
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "migrate", "json"] }
 
 uuid = { workspace = true, features = ["v4"] }
 chrono.workspace = true
