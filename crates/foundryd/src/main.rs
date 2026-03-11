@@ -129,8 +129,8 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(AppState { db, config, auth });
 
-    // Start the agent watchdog
-    runtime::watchdog::start_agent_watchdog();
+    // Agent watchdog disabled — worker is now built into this binary
+    // runtime::watchdog::start_agent_watchdog();
 
     // Start the built-in worker
     let worker_disabled = std::env::var("FOUNDRY_WORKER_DISABLED")
